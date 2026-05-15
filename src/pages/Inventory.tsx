@@ -12,7 +12,7 @@ import type { ItemFilters, ItemStatus } from '../types'
 export default function Inventory() {
   const [filters, setFilters] = useState<ItemFilters>({})
   const [addOpen, setAddOpen] = useState(false)
-  const { data: items = [], isLoading, error } = useItems(filters)
+  const { data: items = [], isLoading, isFetching, error } = useItems(filters)
 
   const counts = items.reduce<Partial<Record<ItemStatus, number>>>((acc, item) => {
     acc[item.status] = (acc[item.status] ?? 0) + 1
@@ -21,7 +21,7 @@ export default function Inventory() {
 
   return (
     <Layout>
-      <div className="px-4 md:px-6 py-5">
+      <div className="px-4 md:px-6 py-5 flex flex-col h-full">
         {/* Header */}
         <div className="flex items-center justify-between mb-5">
           <div>
@@ -33,20 +33,18 @@ export default function Inventory() {
           </button>
         </div>
 
-        {/* Status summary pills */}
-        {items.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-4">
-            {(Object.entries(STATUS_CONFIG) as [ItemStatus, { label: string; color: string }][]).map(([k, v]) => counts[k] ? (
-              <button
-                key={k}
-                onClick={() => setFilters(f => ({ ...f, status: f.status === k ? undefined : k }))}
-                className={`px-2 py-0.5 text-xs border rounded-full transition-opacity ${v.color} ${filters.status === k ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}
-              >
-                {v.label} · {counts[k]}
-              </button>
-            ) : null)}
-          </div>
-        )}
+        {/* Status summary pills — always rendered so height stays constant */}
+        <div className="flex flex-wrap gap-2 mb-4 h-7 items-center">
+          {(Object.entries(STATUS_CONFIG) as [ItemStatus, { label: string; color: string }][]).map(([k, v]) => counts[k] ? (
+            <button
+              key={k}
+              onClick={() => setFilters(f => ({ ...f, status: f.status === k ? undefined : k }))}
+              className={`px-2 py-0.5 text-xs border rounded-full transition-opacity ${v.color} ${filters.status === k ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}
+            >
+              {v.label} · {counts[k]}
+            </button>
+          ) : null)}
+        </div>
 
         {/* Filters */}
         <div className="mb-4">
@@ -54,9 +52,9 @@ export default function Inventory() {
         </div>
 
         {/* Content */}
-        <div className="card overflow-hidden">
+        <div className={`card overflow-hidden flex-1 min-h-0 transition-opacity duration-200 ${isFetching && !isLoading ? 'opacity-50' : 'opacity-100'}`}>
           {isLoading && (
-            <div className="flex justify-center py-16">
+            <div className="flex justify-center items-center h-full">
               <Spinner />
             </div>
           )}

@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState } from 'react'
 import { useItemMutations } from '../../hooks/useItems'
 import { STATUS_CONFIG } from '../../lib/constants'
 import StatusBadge from '../ui/StatusBadge'
+import Modal from '../ui/Modal'
 import type { ItemStatus } from '../../types'
 
 interface StatusMenuProps {
@@ -11,16 +12,7 @@ interface StatusMenuProps {
 
 export default function StatusMenu({ itemId, currentStatus }: StatusMenuProps) {
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
   const { updateStatus } = useItemMutations()
-
-  useEffect(() => {
-    const h = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [])
 
   const change = async (status: ItemStatus) => {
     setOpen(false)
@@ -28,29 +20,36 @@ export default function StatusMenu({ itemId, currentStatus }: StatusMenuProps) {
   }
 
   return (
-    <div ref={ref} className="relative inline-block">
+    <>
       <button
         type="button"
-        onClick={() => setOpen(o => !o)}
+        onClick={() => setOpen(true)}
         className="cursor-pointer hover:opacity-80 transition-opacity"
       >
         <StatusBadge status={currentStatus} />
       </button>
-      {open && (
-        <div className="absolute z-50 top-full mt-1 left-0 bg-surface-2 border border-border rounded shadow-xl min-w-max">
+
+      <Modal open={open} onClose={() => setOpen(false)} title="Change Status">
+        <div className="space-y-1">
           {(Object.entries(STATUS_CONFIG) as [ItemStatus, { label: string; color: string }][]).map(([k, v]) => (
             <button
               key={k}
               type="button"
+              disabled={k === currentStatus}
               onClick={() => void change(k)}
-              className={`w-full text-left px-3 py-2 text-xs hover:bg-surface-3 flex items-center gap-2 ${k === currentStatus ? 'opacity-50 cursor-default' : ''}`}
+              className={`w-full text-left px-3 py-2.5 rounded text-sm flex items-center gap-3 transition-colors ${
+                k === currentStatus
+                  ? 'opacity-40 cursor-default'
+                  : 'hover:bg-surface-3'
+              }`}
             >
-              <span className={`w-1.5 h-1.5 rounded-full ${v.color.split(' ')[0].replace('/15', '')}`} />
-              {v.label}
+              <span className={`w-2 h-2 rounded-full shrink-0 ${v.color.split(' ')[0].replace('/15', '')}`} />
+              <span className={k === currentStatus ? 'text-gray-400' : 'text-white'}>{v.label}</span>
+              {k === currentStatus && <span className="text-xs text-gray-600 ml-auto">current</span>}
             </button>
           ))}
         </div>
-      )}
-    </div>
+      </Modal>
+    </>
   )
 }

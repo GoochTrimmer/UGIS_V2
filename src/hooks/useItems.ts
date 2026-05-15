@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { supabase } from '../lib/supabase'
 import { generateReadableId } from '../lib/idGenerator'
 import type { Item, Brand, Consignee, ItemFilters, ItemStatus } from '../types'
@@ -29,7 +29,9 @@ function normalizeItem(row: RawItem): Item {
   return { ...rest, brands } as Item
 }
 
-async function fetchItems(filters: ItemFilters = {}): Promise<Item[]> {
+type ServerFilters = Omit<ItemFilters, 'search'>
+
+async function fetchItems(filters: ServerFilters = {}): Promise<Item[]> {
   let query = supabase
     .from('items')
     .select(ITEM_SELECT)
@@ -37,9 +39,6 @@ async function fetchItems(filters: ItemFilters = {}): Promise<Item[]> {
 
   if (filters.status) query = query.eq('status', filters.status)
   if (filters.consignee_id) query = query.eq('consignee_id', filters.consignee_id)
-  if (filters.search) {
-    query = query.or(`name.ilike.%${filters.search}%,readable_id.ilike.%${filters.search}%`)
-  }
 
   const { data, error } = await query
   if (error) throw error
@@ -55,9 +54,18 @@ async function fetchItems(filters: ItemFilters = {}): Promise<Item[]> {
 }
 
 export function useItems(filters?: ItemFilters) {
+  const { search, ...serverFilters } = filters ?? {}
+
   return useQuery({
-    queryKey: ['items', filters],
-    queryFn: () => fetchItems(filters),
+    queryKey: ['items', serverFilters],
+    queryFn: () => fetchItems(serverFilters),
+    placeholderData: keepPreviousData,
+    select: search
+      ? (data: Item[]) => data.filter(item =>
+          item.name.toLowerCase().includes(search.toLowerCase()) ||
+          item.readable_id.toLowerCase().includes(search.toLowerCase())
+        )
+      : undefined,
   })
 }
 

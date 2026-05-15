@@ -23,7 +23,7 @@ export default function InventoryTable({ items }: InventoryTableProps) {
 
   if (!items.length) {
     return (
-      <div className="flex flex-col items-center justify-center py-24 text-gray-600">
+      <div className="flex flex-col items-center justify-center h-full min-h-[20rem] text-gray-600">
         <div className="text-4xl mb-3">◌</div>
         <p className="text-sm">No items found</p>
       </div>
@@ -87,15 +87,10 @@ export default function InventoryTable({ items }: InventoryTableProps) {
           <div key={item.id} className="px-4 py-3 hover:bg-surface-2/30">
             <div className="flex items-start justify-between gap-2 mb-1">
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-white truncate">{item.name}</p>
-                <p className="text-xs text-gray-500 font-mono">{item.readable_id}</p>
+                <p className="text-sm font-medium text-white truncate leading-tight">{item.name}</p>
+                <p className="text-xs font-mono text-gray-500 leading-tight mt-0.5">{item.readable_id}</p>
               </div>
               <StatusMenu itemId={item.id} currentStatus={item.status} />
-            </div>
-            <div className="flex items-center gap-3 text-xs text-gray-500">
-              <span>{(item.brands ?? []).map(b => b.abbreviation).join(' × ')}</span>
-              <span>{formatSeason(item.season_year, item.season_period, item.season_custom)}</span>
-              {item.selling_price && <span className="text-white font-medium ml-auto">{fmt(item.selling_price)}</span>}
             </div>
             <div className="flex gap-2 mt-2">
               <button className="btn-ghost py-0.5 px-2 text-xs" onClick={() => setEditing(item)}>Edit</button>

@@ -76,7 +76,7 @@ export default function Layout({ children }: LayoutProps) {
       </div>
 
       {/* Main content */}
-      <main className="flex-1 overflow-y-auto md:pt-0 pt-12">
+      <main className="flex-1 overflow-y-auto md:pt-0 pt-12 flex flex-col">
         {children}
       </main>
     </div>
