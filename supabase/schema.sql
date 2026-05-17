@@ -26,11 +26,12 @@ create index brands_name_idx on brands using gin(to_tsvector('english', name));
 -- CONSIGNEES
 -- ============================================================
 create table consignees (
-  id            uuid primary key default uuid_generate_v4(),
-  name          text not null,
-  abbreviation  text not null,
-  notes         text,
-  created_at    timestamptz default now(),
+  id                uuid primary key default uuid_generate_v4(),
+  name              text not null,
+  abbreviation      text not null,
+  is_default_store  boolean not null default false,
+  notes             text,
+  created_at        timestamptz default now(),
   constraint consignees_abbreviation_unique unique (abbreviation)
 );
 
@@ -52,6 +53,7 @@ create type item_status as enum (
   'on_rental',
   'out_for_cleaning',
   'reserved',
+  'returned',
   'archived'
 );
 
@@ -185,6 +187,13 @@ create policy "auth_all" on consignees  for all to authenticated using (true) wi
 create policy "auth_all" on items       for all to authenticated using (true) with check (true);
 create policy "auth_all" on item_brands for all to authenticated using (true) with check (true);
 create policy "auth_all" on id_counters for all to authenticated using (true) with check (true);
+
+-- ============================================================
+-- SEED: Default store consignee (always preserved, survives wipe)
+-- ============================================================
+insert into consignees (name, abbreviation, is_default_store) values
+  ('Upstairs Garments', 'UG', true)
+on conflict (abbreviation) do update set is_default_store = true;
 
 -- ============================================================
 -- SEED: Common archive brands

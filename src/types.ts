@@ -4,6 +4,7 @@ export type ItemStatus =
   | 'on_rental'
   | 'out_for_cleaning'
   | 'reserved'
+  | 'returned'
   | 'archived'
 
 export type SeasonPeriod = 'SS' | 'AW' | 'Resort' | 'Pre-Fall' | 'NA' | 'Custom'
@@ -21,6 +22,7 @@ export interface Consignee {
   id: string
   name: string
   abbreviation: string
+  is_default_store: boolean
   notes: string | null
   created_at: string
 }

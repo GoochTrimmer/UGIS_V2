@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../lib/supabase'
 import type { Consignee } from '../types'
 
-type ConsigneeInsert = Omit<Consignee, 'id' | 'created_at'>
+type ConsigneeInsert = Omit<Consignee, 'id' | 'created_at' | 'is_default_store'> & { is_default_store?: boolean }
 type ConsigneeUpdate = Pick<Consignee, 'id'> & Partial<ConsigneeInsert>
 
 async function fetchConsignees(): Promise<Consignee[]> {

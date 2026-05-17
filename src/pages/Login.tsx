@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
+import logo from '../assets/upstairs-garments-logo-trans-03032024.png'
 
 export default function Login() {
   const { signIn } = useAuth()
@@ -24,8 +25,9 @@ export default function Login() {
     <div className="min-h-screen bg-surface-0 flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
+          <img src={logo} alt="Upstairs Garments" className="h-32 w-auto mx-auto mb-4" />
           <p className="text-xs font-mono tracking-widest text-gray-600 uppercase mb-2">UGIS</p>
-          <h1 className="text-xl font-light text-white">Archive Inventory</h1>
+          <h1 className="text-xl font-light text-white">Upstairs Garments Inventory System</h1>
         </div>
         <form onSubmit={handleSubmit} className="card p-6 space-y-4">
           <div>

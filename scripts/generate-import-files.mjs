@@ -35,6 +35,7 @@ const STATUS_REF = [
   ['in_stock',          'Default — item is available'],
   ['sold',              'Item has been sold'],
   ['reserved',          'Held for someone'],
+  ['returned',          'Clawed back by the consignee'],
   ['on_rental',         'Out on loan'],
   ['out_for_cleaning',  'At the cleaner'],
   ['archived',          'No longer active'],

@@ -302,14 +302,18 @@ export default function Import() {
       consignee: Consignee | null
     }
 
+    const storeConsignee = existingConsignees.find(c => c.is_default_store) ?? null
+
     const prepared: PreparedRow[] = []
     for (const row of validRows) {
       const brands = row.brandNames
         .map(n => brandMap.get(n.toLowerCase()))
         .filter((b): b is Brand => b !== undefined)
-      const consignee = row.consigneeName
+      const namedConsignee = row.consigneeName
         ? (consigneeMap.get(row.consigneeName.toLowerCase()) ?? null)
         : null
+      // Default to store (UG) when no consignee specified, so IDs share the same prefix
+      const consignee = namedConsignee ?? storeConsignee
 
       prepared.push({
         name: row.name,
@@ -427,7 +431,7 @@ export default function Import() {
 
     await supabase.from('items').delete().not('id', 'is', null)
     await supabase.from('brands').delete().not('id', 'is', null)
-    await supabase.from('consignees').delete().not('id', 'is', null)
+    await supabase.from('consignees').delete().eq('is_default_store', false)
     await supabase.from('id_counters').delete().not('prefix', 'is', null)
 
     await qc.invalidateQueries()
@@ -683,7 +687,7 @@ export default function Import() {
           <div className="mt-12 border-t border-red-900/30 pt-6">
             <p className="text-xs font-medium text-red-500 mb-1">Danger Zone</p>
             <p className="text-xs text-gray-600 mb-3">
-              Permanently deletes all items, brands, consignees, and ID counters. Used for testing only.
+              Permanently deletes all items, brands, non-store consignees, and ID counters. Upstairs Garments is always preserved. Used for testing only.
             </p>
             <button
               className="text-xs text-red-400 border border-red-900/40 rounded px-3 py-1.5 hover:bg-red-900/20 transition-colors"
@@ -699,7 +703,7 @@ export default function Import() {
       <Modal open={showWipe} onClose={() => setShowWipe(false)} title="Wipe All Data">
         <div className="space-y-4">
           <div className="text-xs text-red-400 bg-red-900/20 border border-red-900/40 rounded px-3 py-2 leading-relaxed">
-            This will permanently delete <strong>all items, brands, consignees, and ID counters</strong>. This cannot be undone.
+            This will permanently delete <strong>all items, brands, non-store consignees, and ID counters</strong>. Upstairs Garments is preserved. This cannot be undone.
           </div>
           <div>
             <label className="label">Enter your account password to confirm</label>

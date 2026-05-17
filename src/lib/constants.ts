@@ -6,6 +6,7 @@ export const STATUS_CONFIG: Record<ItemStatus, { label: string; color: string }>
   on_rental:        { label: 'On Rental',        color: 'bg-blue-500/15 text-blue-400 border-blue-500/30' },
   out_for_cleaning: { label: 'Out for Cleaning', color: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' },
   reserved:         { label: 'Reserved',         color: 'bg-orange-500/15 text-orange-400 border-orange-500/30' },
+  returned:         { label: 'Returned',         color: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30' },
   archived:         { label: 'Archived',         color: 'bg-purple-500/15 text-purple-400 border-purple-500/30' },
 }
 

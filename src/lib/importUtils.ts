@@ -71,6 +71,7 @@ export function normalizeStatus(raw: string | null | undefined): ItemStatus {
   if (s.includes('rental') || s === 'rent') return 'on_rental'
   if (s.includes('cleaning')) return 'out_for_cleaning'
   if (s === 'reserved' || s === 'reserve') return 'reserved'
+  if (s === 'returned' || s === 'return') return 'returned'
   if (s === 'archived' || s === 'archive') return 'archived'
   return 'in_stock'
 }

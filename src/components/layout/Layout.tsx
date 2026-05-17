@@ -1,5 +1,6 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
+import logo from '../../assets/upstairs-garments-logo-trans-03032024.png'
 
 const nav = [
   { to: '/',           label: 'Inventory',  icon: '▦' },
@@ -25,7 +26,8 @@ export default function Layout({ children }: LayoutProps) {
     <div className="flex h-screen">
       {/* Sidebar — desktop */}
       <aside className="hidden md:flex flex-col w-52 bg-surface-1 border-r border-border shrink-0">
-        <div className="px-5 py-5 border-b border-border">
+        <div className="px-5 py-4 border-b border-border flex items-center gap-3">
+          <img src={logo} alt="Upstairs Garments" className="h-9 w-auto" />
           <span className="text-xs font-mono font-medium tracking-widest text-gray-500 uppercase">UGIS</span>
         </div>
         <nav className="flex-1 px-2 py-3 space-y-0.5">
@@ -57,7 +59,10 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Mobile header */}
       <div className="md:hidden fixed top-0 inset-x-0 z-40 bg-surface-1 border-b border-border flex items-center justify-between px-4 py-3">
-        <span className="text-xs font-mono font-medium tracking-widest text-gray-400">UGIS</span>
+        <div className="flex items-center gap-2">
+          <img src={logo} alt="Upstairs Garments" className="h-5 w-auto" />
+          <span className="text-xs font-mono font-medium tracking-widest text-gray-400">UGIS</span>
+        </div>
         <nav className="flex items-center gap-1">
           {nav.map(({ to, label }) => (
             <NavLink
