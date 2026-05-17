@@ -87,6 +87,7 @@ export function useItem(id: string | undefined) {
 
 interface CreateItemInput {
   name: string
+  size: string | null
   status: ItemStatus
   season_year: number | null
   season_period: string | null
@@ -102,6 +103,7 @@ interface CreateItemInput {
 
 interface UpdateItemInput extends CreateItemInput {
   id: string
+  readable_id: string
 }
 
 export function useItemMutations() {
@@ -138,8 +140,24 @@ export function useItemMutations() {
   })
 
   const update = useMutation({
-    mutationFn: async ({ id, brands, consignee: _consignee, ...item }: UpdateItemInput) => {
-      const { error } = await supabase.from('items').update(item).eq('id', id)
+    mutationFn: async ({ id, brands, consignee, readable_id: currentReadableId, ...item }: UpdateItemInput) => {
+      // Regenerate readable_id if brands or consignee changed (both affect the prefix)
+      const oldPrefix = currentReadableId.replace(/-\d+$/, '')
+      const newParts = [
+        ...brands.map(b => b.abbreviation),
+        ...(consignee ? [consignee.abbreviation] : []),
+      ]
+      const newPrefix = newParts.join('-')
+
+      let newReadableId = currentReadableId
+      if (newPrefix && newPrefix !== oldPrefix) {
+        newReadableId = await generateReadableId(
+          brands.map(b => b.abbreviation),
+          consignee?.abbreviation ?? null,
+        )
+      }
+
+      const { error } = await supabase.from('items').update({ ...item, readable_id: newReadableId }).eq('id', id)
       if (error) throw error
 
       await supabase.from('item_brands').delete().eq('item_id', id)

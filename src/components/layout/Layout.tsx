@@ -5,6 +5,7 @@ const nav = [
   { to: '/',           label: 'Inventory',  icon: '▦' },
   { to: '/brands',     label: 'Brands',     icon: '◈' },
   { to: '/consignees', label: 'Consignees', icon: '◎' },
+  { to: '/import',     label: 'Import',     icon: '↑' },
 ]
 
 interface LayoutProps {

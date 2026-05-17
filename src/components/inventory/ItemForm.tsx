@@ -14,6 +14,7 @@ interface ItemFormProps {
 
 interface ItemFormValues {
   name: string
+  size: string
   status: ItemStatus
   season_year: string
   season_period: SeasonPeriod
@@ -36,6 +37,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
   const { register, handleSubmit, watch, reset, formState: { errors, isSubmitting } } = useForm<ItemFormValues>({
     defaultValues: {
       name: '',
+      size: '',
       status: 'in_stock',
       season_year: '',
       season_period: 'SS',
@@ -49,11 +51,13 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
   })
 
   const seasonPeriod = watch('season_period')
+  const sizeReg = register('size')
 
   useEffect(() => {
     if (item) {
       reset({
         name: item.name,
+        size: item.size ?? '',
         status: item.status,
         season_year: item.season_year ? String(item.season_year) : '',
         season_period: (item.season_period as SeasonPeriod) ?? 'SS',
@@ -73,6 +77,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
 
     const payload = {
       name: data.name.trim(),
+      size: data.size.trim() || null,
       status: data.status,
       season_year: data.season_year ? parseInt(data.season_year) : null,
       season_period: data.season_period || null,
@@ -86,7 +91,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       consignee,
     }
 
-    if (item) await update.mutateAsync({ id: item.id, ...payload })
+    if (item) await update.mutateAsync({ id: item.id, readable_id: item.readable_id, ...payload })
     else await create.mutateAsync(payload)
     onDone()
   }
@@ -101,11 +106,25 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
         </div>
       )}
 
-      {/* Name */}
-      <div>
-        <label className="label">Item Name *</label>
-        <input className="input" {...register('name', { required: true })} placeholder='AW11 Undercover Jacket "Klaus"' />
-        {errors.name && <p className="text-xs text-red-400 mt-1">Required</p>}
+      {/* Name + Size */}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="col-span-2">
+          <label className="label">Item Name *</label>
+          <input className="input" {...register('name', { required: true })} placeholder='AW11 Undercover Jacket "Klaus"' />
+          {errors.name && <p className="text-xs text-red-400 mt-1">Required</p>}
+        </div>
+        <div>
+          <label className="label">Size</label>
+          <input
+            className="input font-mono"
+            {...sizeReg}
+            onChange={e => {
+              e.target.value = e.target.value.toUpperCase()
+              void sizeReg.onChange(e)
+            }}
+            placeholder="M, XL, 38…"
+          />
+        </div>
       </div>
 
       {/* Brands */}

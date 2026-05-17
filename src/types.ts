@@ -37,6 +37,7 @@ export interface Item {
   cost_amount: number | null
   takeback_price: number | null
   selling_price: number | null
+  size: string | null
   notes: string | null
   created_at: string
   updated_at: string

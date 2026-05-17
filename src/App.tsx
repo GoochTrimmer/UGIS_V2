@@ -4,6 +4,7 @@ import Login from './pages/Login'
 import Inventory from './pages/Inventory'
 import Brands from './pages/Brands'
 import Consignees from './pages/Consignees'
+import Import from './pages/Import'
 import Spinner from './components/ui/Spinner'
 
 interface ProtectedProps {
@@ -31,6 +32,7 @@ export default function App() {
         <Route path="/" element={<Protected><Inventory /></Protected>} />
         <Route path="/brands" element={<Protected><Brands /></Protected>} />
         <Route path="/consignees" element={<Protected><Consignees /></Protected>} />
+        <Route path="/import" element={<Protected><Import /></Protected>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

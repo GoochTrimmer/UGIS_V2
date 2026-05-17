@@ -68,6 +68,7 @@ create table items (
   id              uuid primary key default uuid_generate_v4(),
   readable_id     text not null,
   name            text not null,
+  size            text,
   season_year     smallint,
   season_period   season_period,
   season_custom   text,            -- only used when season_period = 'Custom'
@@ -131,6 +132,25 @@ begin
     set current_count = id_counters.current_count + 1
   returning current_count into v_count;
   return v_count;
+end;
+$$;
+
+-- ============================================================
+-- BATCH ID RESERVATION
+-- Atomically reserves p_count IDs for a prefix, returns the first reserved count.
+-- E.g. if current_count is 5 and p_count is 3, returns 6 (IDs 6, 7, 8 are reserved).
+-- ============================================================
+create or replace function reserve_id_range(p_prefix text, p_count integer)
+returns integer language plpgsql as $$
+declare
+  v_start integer;
+begin
+  insert into id_counters(prefix, current_count)
+  values (p_prefix, p_count)
+  on conflict (prefix) do update
+    set current_count = id_counters.current_count + p_count
+  returning current_count - p_count + 1 into v_start;
+  return v_start;
 end;
 $$;
 

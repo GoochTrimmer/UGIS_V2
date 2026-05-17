@@ -35,10 +35,11 @@ export default function InventoryTable({ items }: InventoryTableProps) {
       {/* Desktop table */}
       <div className="hidden md:block overflow-x-auto">
         <table className="w-full text-sm">
-          <thead>
+          <thead className="sticky top-0 z-10 bg-surface-1">
             <tr className="border-b border-border text-left text-xs text-gray-600">
               <th className="px-4 py-2.5 font-medium w-28">ID</th>
               <th className="px-4 py-2.5 font-medium">Item</th>
+              <th className="px-4 py-2.5 font-medium w-16">Size</th>
               <th className="px-4 py-2.5 font-medium">Brands</th>
               <th className="px-4 py-2.5 font-medium w-20">Season</th>
               <th className="px-4 py-2.5 font-medium w-32">Status</th>
@@ -53,6 +54,7 @@ export default function InventoryTable({ items }: InventoryTableProps) {
               <tr key={item.id} className="hover:bg-surface-2/50 group">
                 <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">{item.readable_id}</td>
                 <td className="px-4 py-3 text-white font-medium max-w-xs truncate" title={item.name}>{item.name}</td>
+                <td className="px-4 py-3 text-xs font-mono text-gray-400">{item.size ?? '—'}</td>
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-1">
                     {(item.brands ?? []).map(b => (
@@ -88,7 +90,9 @@ export default function InventoryTable({ items }: InventoryTableProps) {
             <div className="flex items-start justify-between gap-2 mb-1">
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-white truncate leading-tight">{item.name}</p>
-                <p className="text-xs font-mono text-gray-500 leading-tight mt-0.5">{item.readable_id}</p>
+                <p className="text-xs font-mono text-gray-500 leading-tight mt-0.5">
+                  {item.readable_id}{item.size ? <span className="text-gray-400"> · {item.size}</span> : null}
+                </p>
               </div>
               <StatusMenu itemId={item.id} currentStatus={item.status} />
             </div>

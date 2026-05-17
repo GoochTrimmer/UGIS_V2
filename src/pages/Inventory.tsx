@@ -10,14 +10,20 @@ import { STATUS_CONFIG } from '../lib/constants'
 import type { ItemFilters, ItemStatus } from '../types'
 
 export default function Inventory() {
-  const [filters, setFilters] = useState<ItemFilters>({})
+  const [filters, setFilters] = useState<ItemFilters>({ status: 'in_stock' })
   const [addOpen, setAddOpen] = useState(false)
-  const { data: items = [], isLoading, isFetching, error } = useItems(filters)
 
-  const counts = items.reduce<Partial<Record<ItemStatus, number>>>((acc, item) => {
+  const { data: items = [], isLoading, isFetching, error } = useItems(filters)
+  // Fetch without status filter so tab counts always reflect the full dataset
+  const { data: allForCounts = [] } = useItems({ ...filters, status: undefined })
+
+  const counts = allForCounts.reduce<Partial<Record<ItemStatus, number>>>((acc, item) => {
     acc[item.status] = (acc[item.status] ?? 0) + 1
     return acc
   }, {})
+
+  const setStatus = (status: ItemStatus | undefined) =>
+    setFilters(f => ({ ...f, status }))
 
   return (
     <Layout>
@@ -33,17 +39,25 @@ export default function Inventory() {
           </button>
         </div>
 
-        {/* Status summary pills — always rendered so height stays constant */}
-        <div className="flex flex-wrap gap-2 mb-4 h-7 items-center">
-          {(Object.entries(STATUS_CONFIG) as [ItemStatus, { label: string; color: string }][]).map(([k, v]) => counts[k] ? (
-            <button
-              key={k}
-              onClick={() => setFilters(f => ({ ...f, status: f.status === k ? undefined : k }))}
-              className={`px-2 py-0.5 text-xs border rounded-full transition-opacity ${v.color} ${filters.status === k ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}
-            >
-              {v.label} · {counts[k]}
-            </button>
-          ) : null)}
+        {/* Status tabs */}
+        <div className="flex flex-wrap gap-1.5 mb-4">
+          <button
+            onClick={() => setStatus(undefined)}
+            className={`px-2.5 py-0.5 text-xs border rounded-full transition-opacity bg-white/10 text-white border-white/20 ${!filters.status ? 'opacity-100' : 'opacity-40 hover:opacity-70'}`}
+          >
+            All · {allForCounts.length}
+          </button>
+          {(Object.entries(STATUS_CONFIG) as [ItemStatus, { label: string; color: string }][]).map(([k, v]) =>
+            counts[k] || filters.status === k ? (
+              <button
+                key={k}
+                onClick={() => setStatus(k)}
+                className={`px-2.5 py-0.5 text-xs border rounded-full transition-opacity ${v.color} ${filters.status === k ? 'opacity-100' : 'opacity-40 hover:opacity-70'}`}
+              >
+                {v.label} · {counts[k] ?? 0}
+              </button>
+            ) : null
+          )}
         </div>
 
         {/* Filters */}
@@ -52,7 +66,7 @@ export default function Inventory() {
         </div>
 
         {/* Content */}
-        <div className={`card overflow-hidden flex-1 min-h-0 transition-opacity duration-200 ${isFetching && !isLoading ? 'opacity-50' : 'opacity-100'}`}>
+        <div className={`card overflow-auto flex-1 min-h-0 transition-opacity duration-200 ${isFetching && !isLoading ? 'opacity-50' : 'opacity-100'}`}>
           {isLoading && (
             <div className="flex justify-center items-center h-full">
               <Spinner />

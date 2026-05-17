@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { useBrands, useBrandMutations } from '../../hooks/useBrands'
 import type { Brand } from '../../types'
@@ -17,11 +17,13 @@ interface BrandFormValues {
 
 export default function BrandForm({ brand, onDone }: BrandFormProps) {
   const { data: brands = [] } = useBrands()
-  const { create, update } = useBrandMutations()
+  const { create, update, regenerateIds } = useBrandMutations()
   const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<BrandFormValues>()
+  const originalAbbrRef = useRef('')
 
   useEffect(() => {
     if (brand) {
+      originalAbbrRef.current = brand.abbreviation
       reset({
         name: brand.name,
         abbreviation: brand.abbreviation,
@@ -34,14 +36,18 @@ export default function BrandForm({ brand, onDone }: BrandFormProps) {
   }, [brand, reset])
 
   const onSubmit = async (data: BrandFormValues) => {
+    const newAbbr = data.abbreviation.trim().toUpperCase()
     const payload = {
       name: data.name.trim(),
-      abbreviation: data.abbreviation.trim().toUpperCase(),
+      abbreviation: newAbbr,
       aliases: data.aliases ? data.aliases.split(',').map(a => a.trim()).filter(Boolean) : [],
       parent_id: data.parent_id || null,
     }
     if (brand) {
       await update.mutateAsync({ id: brand.id, ...payload })
+      if (newAbbr !== originalAbbrRef.current) {
+        await regenerateIds.mutateAsync(brand.id)
+      }
     } else {
       await create.mutateAsync(payload)
     }
@@ -77,8 +83,8 @@ export default function BrandForm({ brand, onDone }: BrandFormProps) {
       </div>
       <div className="flex gap-2 justify-end pt-2">
         <button type="button" className="btn-ghost" onClick={onDone}>Cancel</button>
-        <button type="submit" className="btn-primary" disabled={isSubmitting}>
-          {isSubmitting ? 'Saving…' : brand ? 'Save Changes' : 'Create Brand'}
+        <button type="submit" className="btn-primary" disabled={isSubmitting || regenerateIds.isPending}>
+          {regenerateIds.isPending ? 'Updating IDs…' : isSubmitting ? 'Saving…' : brand ? 'Save Changes' : 'Create Brand'}
         </button>
       </div>
     </form>
