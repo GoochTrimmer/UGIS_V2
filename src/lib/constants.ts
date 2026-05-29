@@ -1,4 +1,4 @@
-import type { ItemStatus, SeasonPeriod } from '../types'
+import type { ItemStatus, SeasonPeriod, SaleChannel, SaleGeography } from '../types'
 
 export const STATUS_CONFIG: Record<ItemStatus, { label: string; color: string }> = {
   in_stock:         { label: 'In Stock',         color: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
@@ -11,6 +11,20 @@ export const STATUS_CONFIG: Record<ItemStatus, { label: string; color: string }>
 }
 
 export const SEASON_PERIODS: SeasonPeriod[] = ['SS', 'AW', 'Resort', 'Pre-Fall', 'NA', 'Custom']
+
+export const SALE_CHANNEL_CONFIG: Record<SaleChannel, { label: string }> = {
+  in_store:  { label: 'In Store' },
+  website:   { label: 'Website' },
+  grailed:   { label: 'Grailed' },
+  carousell: { label: 'Carousell' },
+  instagram: { label: 'Instagram' },
+  other:     { label: 'Other' },
+}
+
+export const SALE_GEOGRAPHY_CONFIG: Record<SaleGeography, { label: string; color: string }> = {
+  local:    { label: 'Local',    color: '#6366f1' },
+  overseas: { label: 'Overseas', color: '#14b8a6' },
+}
 
 export const CURRENT_YEAR = new Date().getFullYear()
 export const YEAR_OPTIONS = Array.from({ length: 60 }, (_, i) => CURRENT_YEAR - i)

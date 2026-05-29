@@ -11,6 +11,7 @@ interface ConsigneeFormProps {
 interface ConsigneeFormValues {
   name: string
   abbreviation: string
+  contact: string
   notes: string
 }
 
@@ -20,8 +21,8 @@ export default function ConsigneeForm({ consignee, onDone }: ConsigneeFormProps)
 
   useEffect(() => {
     reset(consignee
-      ? { name: consignee.name, abbreviation: consignee.abbreviation, notes: consignee.notes ?? '' }
-      : { name: '', abbreviation: '', notes: '' }
+      ? { name: consignee.name, abbreviation: consignee.abbreviation, contact: consignee.contact ?? '', notes: consignee.notes ?? '' }
+      : { name: '', abbreviation: '', contact: '', notes: '' }
     )
   }, [consignee, reset])
 
@@ -29,6 +30,7 @@ export default function ConsigneeForm({ consignee, onDone }: ConsigneeFormProps)
     const payload = {
       name: data.name.trim(),
       abbreviation: data.abbreviation.trim().toUpperCase(),
+      contact: data.contact.trim() || null,
       notes: data.notes.trim() || null,
     }
     if (consignee) await update.mutateAsync({ id: consignee.id, ...payload })
@@ -49,8 +51,12 @@ export default function ConsigneeForm({ consignee, onDone }: ConsigneeFormProps)
         {errors.abbreviation && <p className="text-xs text-red-400 mt-1">Required</p>}
       </div>
       <div>
+        <label className="label">Contact</label>
+        <input className="input" {...register('contact')} placeholder="Phone, email, Instagram…" />
+      </div>
+      <div>
         <label className="label">Notes</label>
-        <input className="input" {...register('notes')} placeholder="Contact info, terms…" />
+        <input className="input" {...register('notes')} placeholder="Terms, preferences…" />
       </div>
       <div className="flex gap-2 justify-end pt-2">
         <button type="button" className="btn-ghost" onClick={onDone}>Cancel</button>

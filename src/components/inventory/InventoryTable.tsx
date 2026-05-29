@@ -13,7 +13,7 @@ interface InventoryTableProps {
 
 function fmt(amount: number | null | undefined): string {
   if (amount == null) return '—'
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(amount)
+  return new Intl.NumberFormat('en-SG', { style: 'currency', currency: 'SGD', maximumFractionDigits: 0 }).format(amount)
 }
 
 export default function InventoryTable({ items }: InventoryTableProps) {
@@ -66,11 +66,26 @@ export default function InventoryTable({ items }: InventoryTableProps) {
                   {formatSeason(item.season_year, item.season_period, item.season_custom)}
                 </td>
                 <td className="px-4 py-3">
-                  <StatusMenu itemId={item.id} currentStatus={item.status} />
+                  <StatusMenu itemId={item.id} currentStatus={item.status} sellingPrice={item.selling_price} />
                 </td>
                 <td className="px-4 py-3 text-xs text-gray-400">{item.consignee?.name ?? '—'}</td>
-                <td className="px-4 py-3 text-xs text-gray-500 text-right">{fmt(item.cost_amount)}</td>
-                <td className="px-4 py-3 text-xs text-white text-right font-medium">{fmt(item.selling_price)}</td>
+                <td className="px-4 py-3 text-xs text-gray-500 text-right">
+                  {item.consignee && !item.consignee.is_default_store
+                    ? fmt(item.takeback_price)
+                    : fmt(item.cost_amount)}
+                </td>
+                <td className="px-4 py-3 text-xs text-right">
+                  {item.status === 'sold' && item.sold_price != null ? (
+                    <div>
+                      <div className="text-white font-medium">{fmt(item.sold_price)}</div>
+                      {item.sold_price !== item.selling_price && item.selling_price != null && (
+                        <div className="text-gray-600 line-through">{fmt(item.selling_price)}</div>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-white font-medium">{fmt(item.selling_price)}</span>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-right">
                   <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
                     <button className="btn-ghost py-1 px-2 text-xs" onClick={() => setEditing(item)}>Edit</button>

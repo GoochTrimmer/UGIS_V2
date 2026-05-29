@@ -82,16 +82,20 @@ export function extractSequence(readableId: string): string {
 
 export function guessColumnMapping(headers: string[]): Record<string, string> {
   const patterns: Array<[string, RegExp]> = [
-    ['name',      /name|item|description|title/i],
-    ['brand',     /brand/i],
-    ['size',      /size/i],
-    ['season',    /season/i],
-    ['status',    /status/i],
-    ['consignee', /consignee|stockist/i],
-    ['takeback',  /take.?back|return.?price|takeback/i],
-    ['selling',   /sell|listed|retail|asking/i],
-    ['cost',      /cost|purchase|paid/i],
-    ['notes',     /note|comment|remark/i],
+    ['readable_id',    /^id$|item.?id|readable.?id/i],
+    ['name',           /name|item|description|title/i],
+    ['brand',          /brand/i],
+    ['size',           /size/i],
+    ['season',         /season/i],
+    ['status',         /status/i],
+    ['consignee',      /consignee|stockist/i],
+    ['takeback',       /take.?back|return.?price|takeback/i],
+    ['sold_price',     /sold.?price|actual.?price/i],
+    ['selling',        /sell|listed|retail|asking/i],
+    ['cost',           /cost|purchase|paid/i],
+    ['sale_channel',   /channel|platform/i],
+    ['sale_geography', /geography|geo/i],
+    ['notes',          /note|comment|remark/i],
   ]
 
   const mapping: Record<string, string> = {}

@@ -1,11 +1,12 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { supabase } from '../lib/supabase'
 import { generateReadableId } from '../lib/idGenerator'
-import type { Item, Brand, Consignee, ItemFilters, ItemStatus } from '../types'
+import { buildSnapshot, computeDiff, writeItemLog } from '../lib/itemLog'
+import type { Item, Brand, Consignee, ItemFilters, ItemStatus, ItemSnapshot, SaleChannel, SaleGeography } from '../types'
 
 const ITEM_SELECT = `
   *,
-  consignee:consignees(id, name, abbreviation),
+  consignee:consignees(id, name, abbreviation, is_default_store),
   item_brands(
     sort_order,
     brand:brands(id, name, abbreviation, parent_id)
@@ -96,8 +97,11 @@ interface CreateItemInput {
   cost_amount: number | null
   takeback_price: number | null
   selling_price: number | null
+  sold_price: number | null
+  sale_channel: SaleChannel | null
+  sale_geography: SaleGeography | null
   notes: string | null
-  brands: Brand[]
+  brands: Pick<Brand, 'id' | 'name' | 'abbreviation'>[]
   consignee: Pick<Consignee, 'id' | 'name' | 'abbreviation'> | null
 }
 
@@ -109,6 +113,7 @@ interface UpdateItemInput extends CreateItemInput {
 export function useItemMutations() {
   const qc = useQueryClient()
   const invalidate = () => qc.invalidateQueries({ queryKey: ['items'] })
+  const invalidateLogs = () => qc.invalidateQueries({ queryKey: ['item_logs'] })
 
   const create = useMutation({
     mutationFn: async ({ brands, consignee, ...item }: CreateItemInput) => {
@@ -123,8 +128,9 @@ export function useItemMutations() {
         .single()
       if (error) throw error
 
+      const insertedId = (data as { id: string }).id
+
       if (brands.length > 0) {
-        const insertedId = (data as { id: string }).id
         const brandRows = brands.map((b, i) => ({
           item_id: insertedId,
           brand_id: b.id,
@@ -134,14 +140,47 @@ export function useItemMutations() {
         if (bErr) throw bErr
       }
 
+      const snapshot: ItemSnapshot = {
+        id: insertedId,
+        name: item.name,
+        size: item.size,
+        status: item.status,
+        season_year: item.season_year,
+        season_period: item.season_period,
+        season_custom: item.season_custom,
+        cost_amount: item.cost_amount,
+        takeback_price: item.takeback_price,
+        selling_price: item.selling_price,
+        sold_price: item.sold_price,
+        sale_channel: item.sale_channel,
+        sale_geography: item.sale_geography,
+        notes: item.notes,
+        readable_id: readableId,
+        consignee_id: item.consignee_id,
+        brands: brands.map(b => ({ id: b.id, name: b.name, abbreviation: b.abbreviation })),
+        consignee: consignee ? { id: consignee.id, name: consignee.name, abbreviation: consignee.abbreviation } : null,
+      }
+      await writeItemLog({
+        item_id: insertedId,
+        item_name: item.name,
+        field_changes: { _action: { from: null, to: 'created' } },
+        snapshot_before: snapshot,
+      })
+
       return data
     },
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate()
+      invalidateLogs()
+    },
   })
 
   const update = useMutation({
     mutationFn: async ({ id, brands, consignee, readable_id: currentReadableId, ...item }: UpdateItemInput) => {
-      // Regenerate readable_id if brands or consignee changed (both affect the prefix)
+      // Fetch current state for audit log before making changes
+      const { data: currentRaw } = await supabase.from('items').select(ITEM_SELECT).eq('id', id).single()
+      const currentItem = currentRaw ? normalizeItem(currentRaw as unknown as RawItem) : null
+
       const oldPrefix = currentReadableId.replace(/-\d+$/, '')
       const newParts = [
         ...brands.map(b => b.abbreviation),
@@ -170,27 +209,88 @@ export function useItemMutations() {
         const { error: bErr } = await supabase.from('item_brands').insert(brandRows)
         if (bErr) throw bErr
       }
+
+      if (currentItem) {
+        const snapshot = buildSnapshot(currentItem)
+        const changes = computeDiff(snapshot, { ...item, consignee_id: consignee?.id ?? null, consignee, brands })
+        if (Object.keys(changes).length > 0) {
+          await writeItemLog({ item_id: id, item_name: currentItem.name, field_changes: changes, snapshot_before: snapshot })
+        }
+      }
     },
     onSuccess: (_, vars) => {
       invalidate()
+      invalidateLogs()
       qc.invalidateQueries({ queryKey: ['item', vars.id] })
     },
   })
 
   const updateStatus = useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: ItemStatus }) => {
-      const { error } = await supabase.from('items').update({ status }).eq('id', id)
+    mutationFn: async ({ id, status, sold_price, sale_channel, sale_geography }: {
+      id: string
+      status: ItemStatus
+      sold_price?: number | null
+      sale_channel?: SaleChannel | null
+      sale_geography?: SaleGeography | null
+    }) => {
+      const { data: currentRaw } = await supabase.from('items').select(ITEM_SELECT).eq('id', id).single()
+      const currentItem = currentRaw ? normalizeItem(currentRaw as unknown as RawItem) : null
+
+      const patch: Record<string, unknown> = { status }
+      if (sold_price !== undefined) patch.sold_price = sold_price
+      if (sale_channel !== undefined) patch.sale_channel = sale_channel
+      if (sale_geography !== undefined) patch.sale_geography = sale_geography
+
+      const { error } = await supabase.from('items').update(patch).eq('id', id)
       if (error) throw error
+
+      if (currentItem) {
+        const snapshot = buildSnapshot(currentItem)
+        const changes: Record<string, { from: unknown; to: unknown }> = {}
+        if (currentItem.status !== status) changes.status = { from: currentItem.status, to: status }
+        if (sold_price !== undefined && currentItem.sold_price !== sold_price) {
+          changes.sold_price = { from: currentItem.sold_price, to: sold_price }
+        }
+        if (sale_channel !== undefined && currentItem.sale_channel !== sale_channel) {
+          changes.sale_channel = { from: currentItem.sale_channel, to: sale_channel }
+        }
+        if (sale_geography !== undefined && currentItem.sale_geography !== sale_geography) {
+          changes.sale_geography = { from: currentItem.sale_geography, to: sale_geography }
+        }
+        if (Object.keys(changes).length > 0) {
+          await writeItemLog({ item_id: id, item_name: currentItem.name, field_changes: changes, snapshot_before: snapshot })
+        }
+      }
     },
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate()
+      invalidateLogs()
+    },
   })
 
   const remove = useMutation({
     mutationFn: async (id: string) => {
+      const { data: currentRaw } = await supabase.from('items').select(ITEM_SELECT).eq('id', id).single()
+      const currentItem = currentRaw ? normalizeItem(currentRaw as unknown as RawItem) : null
+
+      // Log BEFORE deleting — FK constraint requires the item to still exist at insert time.
+      // After deletion, ON DELETE SET NULL will null out item_id automatically.
+      if (currentItem) {
+        await writeItemLog({
+          item_id: id,
+          item_name: currentItem.name,
+          field_changes: { _action: { from: null, to: 'deleted' } },
+          snapshot_before: buildSnapshot(currentItem),
+        })
+      }
+
       const { error } = await supabase.from('items').delete().eq('id', id)
       if (error) throw error
     },
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate()
+      invalidateLogs()
+    },
   })
 
   return { create, update, updateStatus, remove }

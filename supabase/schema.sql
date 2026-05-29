@@ -30,6 +30,7 @@ create table consignees (
   name              text not null,
   abbreviation      text not null,
   is_default_store  boolean not null default false,
+  contact           text,
   notes             text,
   created_at        timestamptz default now(),
   constraint consignees_abbreviation_unique unique (abbreviation)
@@ -57,6 +58,20 @@ create type item_status as enum (
   'archived'
 );
 
+create type sale_channel as enum (
+  'in_store',
+  'website',
+  'grailed',
+  'carousell',
+  'instagram',
+  'other'
+);
+
+create type sale_geography as enum (
+  'local',
+  'overseas'
+);
+
 create type season_period as enum (
   'SS',
   'AW',
@@ -79,6 +94,9 @@ create table items (
   cost_amount     numeric(10,2),
   takeback_price  numeric(10,2),
   selling_price   numeric(10,2),
+  sold_price      numeric(10,2),
+  sale_channel    sale_channel,
+  sale_geography  sale_geography,
   notes           text,
   created_at      timestamptz default now(),
   updated_at      timestamptz default now(),
@@ -173,6 +191,22 @@ returns setof uuid language sql stable as $$
 $$;
 
 -- ============================================================
+-- ITEM EDIT LOG
+-- ============================================================
+create table item_logs (
+  id              uuid primary key default uuid_generate_v4(),
+  item_id         uuid references items(id) on delete set null,
+  item_name       text not null,
+  changed_at      timestamptz default now(),
+  changed_by      uuid references auth.users(id) on delete set null,
+  field_changes   jsonb not null,
+  snapshot_before jsonb not null,
+  reverted        boolean not null default false
+);
+create index item_logs_item_idx on item_logs(item_id);
+create index item_logs_changed_at_idx on item_logs(changed_at desc);
+
+-- ============================================================
 -- ROW LEVEL SECURITY
 -- ============================================================
 alter table brands      enable row level security;
@@ -180,6 +214,7 @@ alter table consignees  enable row level security;
 alter table items       enable row level security;
 alter table item_brands enable row level security;
 alter table id_counters enable row level security;
+alter table item_logs   enable row level security;
 
 -- Authenticated users can read and write everything
 create policy "auth_all" on brands      for all to authenticated using (true) with check (true);
@@ -187,6 +222,7 @@ create policy "auth_all" on consignees  for all to authenticated using (true) wi
 create policy "auth_all" on items       for all to authenticated using (true) with check (true);
 create policy "auth_all" on item_brands for all to authenticated using (true) with check (true);
 create policy "auth_all" on id_counters for all to authenticated using (true) with check (true);
+create policy "auth_all" on item_logs   for all to authenticated using (true) with check (true);
 
 -- ============================================================
 -- SEED: Default store consignee (always preserved, survives wipe)

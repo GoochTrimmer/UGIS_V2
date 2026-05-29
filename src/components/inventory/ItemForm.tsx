@@ -7,8 +7,8 @@ import BrandSelector from '../brands/BrandSelector'
 import Modal from '../ui/Modal'
 import BrandForm from '../brands/BrandForm'
 import ConsigneeForm from '../consignees/ConsigneeForm'
-import { STATUS_CONFIG, SEASON_PERIODS, YEAR_OPTIONS } from '../../lib/constants'
-import type { Item, Brand, ItemStatus, SeasonPeriod } from '../../types'
+import { STATUS_CONFIG, SEASON_PERIODS, YEAR_OPTIONS, SALE_CHANNEL_CONFIG, SALE_GEOGRAPHY_CONFIG } from '../../lib/constants'
+import type { Item, Brand, ItemStatus, SeasonPeriod, SaleChannel, SaleGeography } from '../../types'
 
 interface ItemFormProps {
   item?: Item
@@ -26,6 +26,9 @@ interface ItemFormValues {
   cost_amount: string
   takeback_price: string
   selling_price: string
+  sold_price: string
+  sale_channel: SaleChannel | ''
+  sale_geography: SaleGeography | ''
   notes: string
 }
 
@@ -44,7 +47,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
     defaultValues: {
       name: '', size: '', status: 'in_stock', season_year: '', season_period: 'SS',
       season_custom: '', consignee_id: '', cost_amount: '', takeback_price: '',
-      selling_price: '', notes: '',
+      selling_price: '', sold_price: '', sale_channel: '', sale_geography: '', notes: '',
     }
   })
 
@@ -53,6 +56,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
 
   const seasonPeriod = watch('season_period')
   const watchedConsigneeId = watch('consignee_id')
+  const watchedStatus = watch('status')
   const sizeReg = register('size')
 
   useEffect(() => {
@@ -70,6 +74,9 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
         cost_amount: item.cost_amount ? String(item.cost_amount) : '',
         takeback_price: item.takeback_price ? String(item.takeback_price) : '',
         selling_price: item.selling_price ? String(item.selling_price) : '',
+        sold_price: item.sold_price ? String(item.sold_price) : '',
+        sale_channel: (item.sale_channel ?? '') as SaleChannel | '',
+        sale_geography: (item.sale_geography ?? '') as SaleGeography | '',
         notes: item.notes ?? '',
       })
       setSelectedBrands(item.brands ?? [])
@@ -117,6 +124,9 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       cost_amount: !isConsigned && data.cost_amount ? parseFloat(data.cost_amount) : null,
       takeback_price: isConsigned && data.takeback_price ? parseFloat(data.takeback_price) : null,
       selling_price: data.selling_price ? parseFloat(data.selling_price) : null,
+      sold_price: data.status === 'sold' && data.sold_price ? parseFloat(data.sold_price) : null,
+      sale_channel: (data.status === 'sold' && data.sale_channel) ? data.sale_channel : null,
+      sale_geography: (data.status === 'sold' && data.sale_geography) ? data.sale_geography : null,
       notes: data.notes.trim() || null,
       brands: selectedBrands,
       consignee: effectiveConsignee,
@@ -264,6 +274,40 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
           <div>
             <label className="label">Selling Price</label>
             <input className="input" type="number" step="0.01" {...register('selling_price')} placeholder="0.00" />
+          </div>
+        </div>
+      )}
+
+      {/* Sale details — only when status is sold */}
+      {watchedStatus === 'sold' && (
+        <div className="border border-border rounded-lg px-3 py-3 space-y-3 bg-surface-2/40">
+          <div>
+            <p className="text-xs font-medium text-white mb-0.5">Sale Details</p>
+            <p className="text-xs text-gray-600">Actual price and channel — may differ from the listed price above.</p>
+          </div>
+          <div>
+            <label className="label">Actual Sold Price</label>
+            <input className="input" type="number" step="0.01" {...register('sold_price')} placeholder="0.00" />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="label">Sale Channel</label>
+              <select className="input" {...register('sale_channel')}>
+                <option value="">— unknown —</option>
+                {(Object.entries(SALE_CHANNEL_CONFIG) as [SaleChannel, { label: string }][]).map(([k, v]) => (
+                  <option key={k} value={k}>{v.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Geography</label>
+              <select className="input" {...register('sale_geography')}>
+                <option value="">— unknown —</option>
+                {(Object.entries(SALE_GEOGRAPHY_CONFIG) as [SaleGeography, { label: string }][]).map(([k, v]) => (
+                  <option key={k} value={k}>{v.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
       )}

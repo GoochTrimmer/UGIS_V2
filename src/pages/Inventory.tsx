@@ -34,9 +34,11 @@ export default function Inventory() {
             <h1 className="text-base font-semibold text-white">Inventory</h1>
             <p className="text-xs text-gray-600 mt-0.5">{items.length} item{items.length !== 1 ? 's' : ''}</p>
           </div>
-          <button className="btn-primary" onClick={() => setAddOpen(true)}>
-            + Add Item
-          </button>
+          <div className="flex items-center gap-2">
+            <button className="btn-primary" onClick={() => setAddOpen(true)}>
+              + Add Item
+            </button>
+          </div>
         </div>
 
         {/* Status tabs */}
