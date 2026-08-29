@@ -37,3 +37,9 @@ export async function convertSgdToUsd(amountSgd: number): Promise<number> {
   const rate = await getSgdToUsdRate()
   return Math.round(amountSgd * rate * 100) / 100
 }
+
+/** Converts a USD amount (e.g. an order line item price) back to SGD, rounded to cents. */
+export async function convertUsdToSgd(amountUsd: number): Promise<number> {
+  const rate = await getSgdToUsdRate()
+  return Math.round((amountUsd / rate) * 100) / 100
+}

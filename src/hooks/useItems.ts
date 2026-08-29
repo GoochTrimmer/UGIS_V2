@@ -115,14 +115,25 @@ interface UpdateItemInput extends CreateItemInput {
   readable_id: string
 }
 
-// Keeps a linked item's Shopify collection (Shop All / Sold Out) in sync
-// whenever its status actually changes — best-effort, fire-and-forget from
-// the caller's perspective. The core UGIS-side status change already
-// succeeded by the time this runs; a Shopify sync hiccup shouldn't undo that
-// or block the mutation, just get logged for staff to notice.
-async function syncShopifyCollectionIfNeeded(oldStatus: string, newStatus: string, shopifyProductId: string | null) {
+// Keeps a linked item's Shopify collection (Shop All / Sold Out) and
+// inventory (0 once sold, so it can't also sell online — spec §2 point 5)
+// in sync whenever its status actually changes — best-effort,
+// fire-and-forget from the caller's perspective. The core UGIS-side status
+// change already succeeded by the time this runs; a Shopify sync hiccup
+// shouldn't undo that or block the mutation, just get logged for staff to
+// notice.
+async function syncShopifyCollectionIfNeeded(
+  oldStatus: string,
+  newStatus: string,
+  shopifyProductId: string | null,
+  shopifyVariantId: string | null,
+) {
   if (!shopifyProductId || oldStatus === newStatus) return
-  const { error } = await invokeEdgeFunction('shopify-sync-collection', { productId: shopifyProductId, status: newStatus })
+  const { error } = await invokeEdgeFunction('shopify-sync-item-status', {
+    productId: shopifyProductId,
+    variantId: shopifyVariantId,
+    status: newStatus,
+  })
   if (error) console.error('[syncShopifyCollectionIfNeeded]', error)
 }
 
@@ -239,7 +250,7 @@ export function useItemMutations() {
         if (Object.keys(changes).length > 0) {
           await writeItemLog({ item_id: id, item_name: currentItem.name, field_changes: changes, snapshot_before: snapshot })
         }
-        await syncShopifyCollectionIfNeeded(currentItem.status, item.status, currentItem.shopify_product_id)
+        await syncShopifyCollectionIfNeeded(currentItem.status, item.status, currentItem.shopify_product_id, currentItem.shopify_variant_id)
       }
     },
     onSuccess: (_, vars) => {
@@ -284,7 +295,7 @@ export function useItemMutations() {
         if (Object.keys(changes).length > 0) {
           await writeItemLog({ item_id: id, item_name: currentItem.name, field_changes: changes, snapshot_before: snapshot })
         }
-        await syncShopifyCollectionIfNeeded(currentItem.status, status, currentItem.shopify_product_id)
+        await syncShopifyCollectionIfNeeded(currentItem.status, status, currentItem.shopify_product_id, currentItem.shopify_variant_id)
       }
     },
     onSuccess: () => {

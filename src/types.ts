@@ -59,6 +59,7 @@ export interface Item {
   scheduled_drop_at: string | null
   is_migrated: boolean
   shopify_needs_finishing: boolean
+  shopify_order_id: string | null
 }
 
 export interface ItemSnapshot {

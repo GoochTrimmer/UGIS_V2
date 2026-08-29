@@ -60,10 +60,20 @@ const JOB_STATUS = `
 // change, which is exactly the "shows in both" symptom this was built to
 // avoid. Bounded so a slow/stuck job can't hang the request indefinitely —
 // worst case, it falls back to "eventually consistent" rather than blocking.
+//
+// By the time this runs, the actual removal request already succeeded (no
+// userErrors) — we're only confirming it's finished. So a transient failure
+// checking status shouldn't throw and unwind the whole sync; it just means
+// giving up on confirmation, not that the removal itself didn't happen.
 async function waitForJob(jobId: string, maxAttempts = 6, delayMs = 500): Promise<void> {
   for (let i = 0; i < maxAttempts; i++) {
-    const data = await shopifyGraphql<{ job: { done: boolean } | null }>(JOB_STATUS, { id: jobId })
-    if (!data.job || data.job.done) return
+    try {
+      const data = await shopifyGraphql<{ job: { done: boolean } | null }>(JOB_STATUS, { id: jobId })
+      if (!data.job || data.job.done) return
+    } catch (err) {
+      console.error('[waitForJob] status check failed, giving up on confirmation', err)
+      return
+    }
     await new Promise(resolve => setTimeout(resolve, delayMs))
   }
 }
@@ -80,25 +90,38 @@ export async function syncProductCollection(productId: string, status: string): 
 
   const gid = productGid(productId)
 
+  // Add and remove are independent outcomes — each gets its own try/catch
+  // so a failure in one (e.g. the remove mutation itself erroring, not just
+  // its polled job) can't prevent the other from being attempted. This is
+  // exactly the bug that let a product sit in both collections indefinitely
+  // instead of just "eventually consistent."
   if (targetId) {
-    const added = await shopifyGraphql<{
-      collectionAddProducts: { userErrors: { field: string[]; message: string }[] }
-    }>(COLLECTION_ADD_PRODUCTS, { id: targetId, productIds: [gid] })
-    if (added.collectionAddProducts.userErrors.length > 0) {
-      console.error(`[syncProductCollection] add to "${targetTitle}" errors`, added.collectionAddProducts.userErrors)
+    try {
+      const added = await shopifyGraphql<{
+        collectionAddProducts: { userErrors: { field: string[]; message: string }[] }
+      }>(COLLECTION_ADD_PRODUCTS, { id: targetId, productIds: [gid] })
+      if (added.collectionAddProducts.userErrors.length > 0) {
+        console.error(`[syncProductCollection] add to "${targetTitle}" errors`, added.collectionAddProducts.userErrors)
+      }
+    } catch (err) {
+      console.error(`[syncProductCollection] add to "${targetTitle}" failed`, err)
     }
   } else {
     console.error(`[syncProductCollection] collection "${targetTitle}" not found in store`)
   }
 
   if (otherId) {
-    const removed = await shopifyGraphql<{
-      collectionRemoveProducts: { job: { id: string } | null; userErrors: { field: string[]; message: string }[] }
-    }>(COLLECTION_REMOVE_PRODUCTS, { id: otherId, productIds: [gid] })
-    if (removed.collectionRemoveProducts.userErrors.length > 0) {
-      console.error(`[syncProductCollection] remove from "${otherTitle}" errors`, removed.collectionRemoveProducts.userErrors)
-    } else if (removed.collectionRemoveProducts.job?.id) {
-      await waitForJob(removed.collectionRemoveProducts.job.id)
+    try {
+      const removed = await shopifyGraphql<{
+        collectionRemoveProducts: { job: { id: string } | null; userErrors: { field: string[]; message: string }[] }
+      }>(COLLECTION_REMOVE_PRODUCTS, { id: otherId, productIds: [gid] })
+      if (removed.collectionRemoveProducts.userErrors.length > 0) {
+        console.error(`[syncProductCollection] remove from "${otherTitle}" errors`, removed.collectionRemoveProducts.userErrors)
+      } else if (removed.collectionRemoveProducts.job?.id) {
+        await waitForJob(removed.collectionRemoveProducts.job.id)
+      }
+    } catch (err) {
+      console.error(`[syncProductCollection] remove from "${otherTitle}" failed`, err)
     }
   }
 }

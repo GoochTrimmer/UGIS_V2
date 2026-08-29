@@ -3,6 +3,7 @@ import { useForm } from 'react-hook-form'
 import { useItemMutations } from '../../hooks/useItems'
 import { useConsignees } from '../../hooks/useConsignees'
 import { useBrands } from '../../hooks/useBrands'
+import { useAnimatedDots } from '../../hooks/useAnimatedDots'
 import { invokeEdgeFunction } from '../../lib/edgeFunctions'
 import BrandSelector from '../brands/BrandSelector'
 import Modal from '../ui/Modal'
@@ -82,6 +83,8 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       ready_to_list: false, scheduled_drop_at: '',
     }
   })
+
+  const savingDots = useAnimatedDots(isSubmitting)
 
   const storeConsignee = consignees.find(c => c.is_default_store) ?? null
   const consigneeOptions = consignees.filter(c => !c.is_default_store)
@@ -583,7 +586,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       <div className="flex gap-2 justify-end pt-2">
         <button type="button" className="btn-ghost" onClick={onDone}>Cancel</button>
         <button type="submit" className="btn-primary" disabled={isSubmitting}>
-          {isSubmitting ? 'Saving…' : item ? 'Save Changes' : 'Add Item'}
+          {isSubmitting ? `Saving${savingDots}` : item ? 'Save Changes' : 'Add Item'}
         </button>
       </div>
 

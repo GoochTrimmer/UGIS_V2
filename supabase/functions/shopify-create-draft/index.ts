@@ -8,6 +8,7 @@ import { shopifyGraphql, gidToId, adminProductUrl } from '../_shared/shopify.ts'
 import { supabaseAdmin } from '../_shared/supabaseAdmin.ts'
 import { convertSgdToUsd } from '../_shared/currency.ts'
 import { syncProductCollection } from '../_shared/collections.ts'
+import { setVariantInventory } from '../_shared/inventory.ts'
 
 interface RequestBody {
   itemId: string
@@ -127,6 +128,11 @@ Deno.serve(async req => {
             id: variantId,
             price: priceUsd,
             inventoryItem: { sku: item.readable_id },
+            // Defaults to DENY anyway, but set explicitly rather than rely
+            // on an implicit default — the in-store enforcement sync
+            // (zeroing inventory when something's marked sold) only
+            // actually blocks a purchase if this is DENY, not CONTINUE.
+            inventoryPolicy: 'DENY',
           },
         ],
       })
@@ -135,6 +141,15 @@ Deno.serve(async req => {
         // whole request over price/SKU — surface as a warning and let
         // staff fix it up directly in Shopify.
         console.error('[shopify-create-draft] variant update errors', updated.productVariantsBulkUpdate.userErrors)
+      }
+
+      // Enable inventory tracking and set initial stock to 1 — a one-off
+      // archive piece is either available or it isn't. Best-effort: the
+      // product/variant already exist regardless of whether this succeeds.
+      try {
+        await setVariantInventory(gidToId(variantId), 1, 'received', true)
+      } catch (err) {
+        console.error('[shopify-create-draft] failed to set initial inventory', err)
       }
     }
 
@@ -170,7 +185,7 @@ Deno.serve(async req => {
 
     // Shop All / Sold Out based on the item's current status — same
     // best-effort treatment; ongoing sync on later status changes is
-    // handled separately by shopify-sync-collection.
+    // handled separately by shopify-sync-item-status.
     try {
       await syncProductCollection(gidToId(product.id), item.status)
     } catch (err) {
