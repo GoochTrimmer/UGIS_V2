@@ -52,6 +52,13 @@ export interface Item {
   updated_at: string
   brands: Brand[]
   consignee: Pick<Consignee, 'id' | 'name' | 'abbreviation' | 'is_default_store'> | null
+  shopify_product_id: string | null
+  shopify_variant_id: string | null
+  shopify_admin_url: string | null
+  ready_to_list: boolean
+  scheduled_drop_at: string | null
+  is_migrated: boolean
+  shopify_needs_finishing: boolean
 }
 
 export interface ItemSnapshot {

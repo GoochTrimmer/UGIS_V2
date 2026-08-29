@@ -530,7 +530,7 @@ export default function Import() {
       season_period: string | null; season_custom: string | null; consignee_id: string | null
       cost_amount: number | null; takeback_price: number | null; selling_price: number | null
       sold_price: number | null; sale_channel: SaleChannel | null; sale_geography: SaleGeography | null
-      notes: string | null; readable_id: string
+      notes: string | null; readable_id: string; is_migrated: boolean
     }> = []
     const rowBrands: Brand[][] = []
 
@@ -546,6 +546,7 @@ export default function Import() {
         selling_price: row.selling_price, sold_price: row.sold_price,
         sale_channel: row.sale_channel, sale_geography: row.sale_geography,
         notes: row.notes, readable_id: `${prefix}-${String(count).padStart(2, '0')}`,
+        is_migrated: true,
       })
       rowBrands.push(row.brands)
     }

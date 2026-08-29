@@ -7,6 +7,7 @@ const nav = [
   { to: '/brands',     label: 'Brands',     icon: '◈' },
   { to: '/consignees', label: 'Consignees', icon: '◎' },
   { to: '/import',     label: 'Import/Export', icon: '↑' },
+  { to: '/shopify',    label: 'Shopify',    icon: '◇' },
   { to: '/logs',       label: 'History',    icon: '◷' },
   { to: '/statistics', label: 'Statistics', icon: '◑' },
 ]

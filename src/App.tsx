@@ -7,6 +7,7 @@ import Consignees from './pages/Consignees'
 import Import from './pages/Import'
 import Logs from './pages/Logs'
 import Statistics from './pages/Statistics'
+import ShopifyLink from './pages/ShopifyLink'
 import Spinner from './components/ui/Spinner'
 
 interface ProtectedProps {
@@ -35,6 +36,7 @@ export default function App() {
         <Route path="/brands" element={<Protected><Brands /></Protected>} />
         <Route path="/consignees" element={<Protected><Consignees /></Protected>} />
         <Route path="/import" element={<Protected><Import /></Protected>} />
+        <Route path="/shopify" element={<Protected><ShopifyLink /></Protected>} />
         <Route path="/logs" element={<Protected><Logs /></Protected>} />
         <Route path="/statistics" element={<Protected><Statistics /></Protected>} />
         <Route path="*" element={<Navigate to="/" replace />} />

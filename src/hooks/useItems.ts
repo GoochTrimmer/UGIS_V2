@@ -101,6 +101,10 @@ interface CreateItemInput {
   sale_channel: SaleChannel | null
   sale_geography: SaleGeography | null
   notes: string | null
+  // Optional — omitted entirely (not just `undefined`) by callers like the
+  // Logs revert flow that don't want to touch Shopify link state.
+  ready_to_list?: boolean
+  scheduled_drop_at?: string | null
   brands: Pick<Brand, 'id' | 'name' | 'abbreviation'>[]
   consignee: Pick<Consignee, 'id' | 'name' | 'abbreviation'> | null
 }
@@ -293,5 +297,37 @@ export function useItemMutations() {
     },
   })
 
-  return { create, update, updateStatus, remove }
+  const markShopifyFinished = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('items').update({ shopify_needs_finishing: false }).eq('id', id)
+      if (error) throw error
+    },
+    onSuccess: (_, id) => {
+      invalidate()
+      qc.invalidateQueries({ queryKey: ['item', id] })
+    },
+  })
+
+  // Clears the link on UGIS's side only — the listing itself is untouched on
+  // Shopify. Resets ready_to_list too, so saving right after doesn't
+  // unexpectedly push a brand new draft; staff re-check that explicitly if
+  // that's actually what they want.
+  const unbindShopify = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('items').update({
+        shopify_product_id: null,
+        shopify_variant_id: null,
+        shopify_admin_url: null,
+        shopify_needs_finishing: false,
+        ready_to_list: false,
+      }).eq('id', id)
+      if (error) throw error
+    },
+    onSuccess: (_, id) => {
+      invalidate()
+      qc.invalidateQueries({ queryKey: ['item', id] })
+    },
+  })
+
+  return { create, update, updateStatus, remove, markShopifyFinished, unbindShopify }
 }

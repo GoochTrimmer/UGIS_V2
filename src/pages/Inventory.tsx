@@ -6,6 +6,7 @@ import InventoryTable from '../components/inventory/InventoryTable'
 import Modal from '../components/ui/Modal'
 import ItemForm from '../components/inventory/ItemForm'
 import Spinner from '../components/ui/Spinner'
+import ShopifyStatusDot from '../components/inventory/ShopifyStatusDot'
 import { STATUS_CONFIG } from '../lib/constants'
 import type { ItemFilters, ItemStatus } from '../types'
 
@@ -63,8 +64,13 @@ export default function Inventory() {
         </div>
 
         {/* Filters */}
-        <div className="mb-4">
+        <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
           <FilterBar filters={filters} onChange={setFilters} />
+          <div className="flex items-center gap-3 text-xs text-gray-600 shrink-0">
+            <span className="flex items-center gap-1.5"><ShopifyStatusDot item={{ shopify_product_id: 'x', shopify_needs_finishing: false }} /> Live</span>
+            <span className="flex items-center gap-1.5"><ShopifyStatusDot item={{ shopify_product_id: 'x', shopify_needs_finishing: true }} /> Draft</span>
+            <span className="flex items-center gap-1.5"><ShopifyStatusDot item={{ shopify_product_id: null, shopify_needs_finishing: false }} /> Unlisted</span>
+          </div>
         </div>
 
         {/* Content */}

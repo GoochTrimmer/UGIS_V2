@@ -3,8 +3,8 @@ import { formatSeason } from '../../lib/idGenerator'
 import StatusMenu from './StatusMenu'
 import Modal from '../ui/Modal'
 import ItemForm from './ItemForm'
-import Confirm from '../ui/Confirm'
-import { useItemMutations } from '../../hooks/useItems'
+import DeleteItemDialog from './DeleteItemDialog'
+import ShopifyStatusDot from './ShopifyStatusDot'
 import type { Item } from '../../types'
 
 interface InventoryTableProps {
@@ -19,7 +19,6 @@ function fmt(amount: number | null | undefined): string {
 export default function InventoryTable({ items }: InventoryTableProps) {
   const [editing, setEditing] = useState<Item | null>(null)
   const [deleting, setDeleting] = useState<Item | null>(null)
-  const { remove } = useItemMutations()
 
   if (!items.length) {
     return (
@@ -52,7 +51,12 @@ export default function InventoryTable({ items }: InventoryTableProps) {
           <tbody className="divide-y divide-border">
             {items.map(item => (
               <tr key={item.id} className="hover:bg-surface-2/50 group">
-                <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">{item.readable_id}</td>
+                <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">
+                  <div className="flex items-center gap-1.5">
+                    <ShopifyStatusDot item={item} />
+                    {item.readable_id}
+                  </div>
+                </td>
                 <td className="px-4 py-3 text-white font-medium max-w-xs truncate" title={item.name}>{item.name}</td>
                 <td className="px-4 py-3 text-xs font-mono text-gray-400">{item.size ?? '—'}</td>
                 <td className="px-4 py-3">
@@ -105,7 +109,8 @@ export default function InventoryTable({ items }: InventoryTableProps) {
             <div className="flex items-start justify-between gap-2 mb-1">
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-white truncate leading-tight">{item.name}</p>
-                <p className="text-xs font-mono text-gray-500 leading-tight mt-0.5">
+                <p className="text-xs font-mono text-gray-500 leading-tight mt-0.5 flex items-center gap-1.5">
+                  <ShopifyStatusDot item={item} />
                   {item.readable_id}{item.size ? <span className="text-gray-400"> · {item.size}</span> : null}
                 </p>
               </div>
@@ -124,15 +129,8 @@ export default function InventoryTable({ items }: InventoryTableProps) {
         {editing && <ItemForm item={editing} onDone={() => setEditing(null)} />}
       </Modal>
 
-      {/* Delete confirm */}
-      <Confirm
-        open={!!deleting}
-        onClose={() => setDeleting(null)}
-        onConfirm={() => remove.mutateAsync(deleting!.id)}
-        title="Delete Item"
-        message={`Delete "${deleting?.name}" (${deleting?.readable_id})? This cannot be undone.`}
-        danger
-      />
+      {/* Delete confirm — warns about + optionally deletes the linked Shopify listing */}
+      <DeleteItemDialog item={deleting} onClose={() => setDeleting(null)} />
     </>
   )
 }
