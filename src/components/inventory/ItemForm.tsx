@@ -57,20 +57,18 @@ interface ItemFormValues {
 }
 
 export default function ItemForm({ item, onDone }: ItemFormProps) {
-  const { create, update, markShopifyFinished, unbindShopify } = useItemMutations()
+  const { create, update, markShopifyFinished, unbindShopify, pushShopifyDraft, linkShopifyProduct } = useItemMutations()
   const { data: consignees = [] } = useConsignees()
   const { data: allBrands = [] } = useBrands()
   const [selectedBrands, setSelectedBrands] = useState<Brand[]>([])
   const [isConsigned, setIsConsigned] = useState(false)
   const [showNewBrand, setShowNewBrand] = useState(false)
   const [showNewConsignee, setShowNewConsignee] = useState(false)
-  const [shopifyPushing, setShopifyPushing] = useState(false)
   const [shopifyError, setShopifyError] = useState<string | null>(null)
   const [unbinding, setUnbinding] = useState(false)
   const [reassigning, setReassigning] = useState(false)
   const [reassignUrl, setReassignUrl] = useState('')
   const [reassignResolving, setReassignResolving] = useState(false)
-  const [reassignLinking, setReassignLinking] = useState(false)
   const [reassignProduct, setReassignProduct] = useState<ResolvedShopifyProduct | null>(null)
   const [reassignVariantId, setReassignVariantId] = useState('')
 
@@ -193,12 +191,14 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
   }
 
   const pushToShopify = async (itemId: string): Promise<boolean> => {
-    setShopifyPushing(true)
     setShopifyError(null)
-    const { error } = await invokeEdgeFunction('shopify-create-draft', { itemId })
-    setShopifyPushing(false)
-    if (error) { setShopifyError(error); return false }
-    return true
+    try {
+      await pushShopifyDraft.mutateAsync({ itemId })
+      return true
+    } catch (err) {
+      setShopifyError(err instanceof Error ? err.message : 'Failed to reach Shopify')
+      return false
+    }
   }
 
   const retryShopifyPush = async () => {
@@ -233,16 +233,17 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
 
   const confirmReassign = async () => {
     if (!item || !reassignProduct || !reassignVariantId) return
-    setReassignLinking(true)
     setShopifyError(null)
-    const { error } = await invokeEdgeFunction('shopify-resolve-link', {
-      itemId: item.id,
-      productId: reassignProduct.productId,
-      variantId: reassignVariantId,
-    })
-    setReassignLinking(false)
-    if (error) { setShopifyError(error); return }
-    onDone()
+    try {
+      await linkShopifyProduct.mutateAsync({
+        itemId: item.id,
+        productId: reassignProduct.productId,
+        variantId: reassignVariantId,
+      })
+      onDone()
+    } catch (err) {
+      setShopifyError(err instanceof Error ? err.message : 'Failed to reach Shopify')
+    }
   }
 
   const mutationError = create.error ?? update.error
@@ -471,10 +472,10 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
               <button
                 type="button"
                 className="btn-ghost py-1 px-2 text-xs"
-                disabled={shopifyPushing}
+                disabled={pushShopifyDraft.isPending}
                 onClick={() => void retryShopifyPush()}
               >
-                {shopifyPushing ? 'Pushing…' : 'Push to Shopify now'}
+                {pushShopifyDraft.isPending ? 'Pushing…' : 'Push to Shopify now'}
               </button>
             )}
           </>
@@ -542,10 +543,10 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
                         <button
                           type="button"
                           className="btn-primary text-xs"
-                          disabled={!reassignVariantId || reassignLinking}
+                          disabled={!reassignVariantId || linkShopifyProduct.isPending}
                           onClick={() => void confirmReassign()}
                         >
-                          {reassignLinking ? 'Linking…' : 'Confirm link'}
+                          {linkShopifyProduct.isPending ? 'Linking…' : 'Confirm link'}
                         </button>
                       </div>
                     </div>

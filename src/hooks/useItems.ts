@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tansta
 import { supabase } from '../lib/supabase'
 import { generateReadableId } from '../lib/idGenerator'
 import { buildSnapshot, computeDiff, writeItemLog } from '../lib/itemLog'
+import { invokeEdgeFunction } from '../lib/edgeFunctions'
 import type { Item, Brand, Consignee, ItemFilters, ItemStatus, ItemSnapshot, SaleChannel, SaleGeography } from '../types'
 
 const ITEM_SELECT = `
@@ -114,6 +115,24 @@ interface UpdateItemInput extends CreateItemInput {
   readable_id: string
 }
 
+// Keeps a linked item's Shopify collection (Shop All / Sold Out) in sync
+// whenever its status actually changes — best-effort, fire-and-forget from
+// the caller's perspective. The core UGIS-side status change already
+// succeeded by the time this runs; a Shopify sync hiccup shouldn't undo that
+// or block the mutation, just get logged for staff to notice.
+async function syncShopifyCollectionIfNeeded(oldStatus: string, newStatus: string, shopifyProductId: string | null) {
+  if (!shopifyProductId || oldStatus === newStatus) return
+  const { error } = await invokeEdgeFunction('shopify-sync-collection', { productId: shopifyProductId, status: newStatus })
+  if (error) console.error('[syncShopifyCollectionIfNeeded]', error)
+}
+
+// Shared mutationKey for anything that creates/changes an item's Shopify
+// link — from a row's perspective, "is this item's Shopify link currently
+// being worked on" is one signal regardless of which action is doing it.
+// useMutationState (see InventoryTable) filters on this to drive the
+// pending-state dot.
+export const SHOPIFY_LINKING_KEY = ['shopify-linking']
+
 export function useItemMutations() {
   const qc = useQueryClient()
   const invalidate = () => qc.invalidateQueries({ queryKey: ['items'] })
@@ -220,6 +239,7 @@ export function useItemMutations() {
         if (Object.keys(changes).length > 0) {
           await writeItemLog({ item_id: id, item_name: currentItem.name, field_changes: changes, snapshot_before: snapshot })
         }
+        await syncShopifyCollectionIfNeeded(currentItem.status, item.status, currentItem.shopify_product_id)
       }
     },
     onSuccess: (_, vars) => {
@@ -264,6 +284,7 @@ export function useItemMutations() {
         if (Object.keys(changes).length > 0) {
           await writeItemLog({ item_id: id, item_name: currentItem.name, field_changes: changes, snapshot_before: snapshot })
         }
+        await syncShopifyCollectionIfNeeded(currentItem.status, status, currentItem.shopify_product_id)
       }
     },
     onSuccess: () => {
@@ -329,5 +350,31 @@ export function useItemMutations() {
     },
   })
 
-  return { create, update, updateStatus, remove, markShopifyFinished, unbindShopify }
+  const pushShopifyDraft = useMutation({
+    mutationKey: SHOPIFY_LINKING_KEY,
+    mutationFn: async ({ itemId }: { itemId: string }) => {
+      const { data, error } = await invokeEdgeFunction('shopify-create-draft', { itemId })
+      if (error) throw new Error(error)
+      return data
+    },
+    onSuccess: (_, { itemId }) => {
+      invalidate()
+      qc.invalidateQueries({ queryKey: ['item', itemId] })
+    },
+  })
+
+  const linkShopifyProduct = useMutation({
+    mutationKey: SHOPIFY_LINKING_KEY,
+    mutationFn: async (vars: { itemId: string; productId: string; variantId: string }) => {
+      const { data, error } = await invokeEdgeFunction('shopify-resolve-link', vars)
+      if (error) throw new Error(error)
+      return data
+    },
+    onSuccess: (_, { itemId }) => {
+      invalidate()
+      qc.invalidateQueries({ queryKey: ['item', itemId] })
+    },
+  })
+
+  return { create, update, updateStatus, remove, markShopifyFinished, unbindShopify, pushShopifyDraft, linkShopifyProduct }
 }

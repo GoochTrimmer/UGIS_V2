@@ -6,6 +6,8 @@
 import { corsPreflight, jsonResponse } from '../_shared/cors.ts'
 import { shopifyGraphql, gidToId, adminProductUrl } from '../_shared/shopify.ts'
 import { supabaseAdmin } from '../_shared/supabaseAdmin.ts'
+import { convertSgdToUsd } from '../_shared/currency.ts'
+import { syncProductCollection } from '../_shared/collections.ts'
 
 interface RequestBody {
   itemId: string
@@ -39,6 +41,22 @@ const VARIANTS_BULK_UPDATE = `
   }
 `
 
+const ALL_PUBLICATIONS = `
+  query allPublications {
+    publications(first: 25) {
+      nodes { id name }
+    }
+  }
+`
+
+const PUBLISH_TO_ALL_CHANNELS = `
+  mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) {
+    publishablePublish(id: $id, input: $input) {
+      userErrors { field message }
+    }
+  }
+`
+
 Deno.serve(async req => {
   const preflight = corsPreflight(req)
   if (preflight) return preflight
@@ -50,7 +68,7 @@ Deno.serve(async req => {
     const db = supabaseAdmin()
     const { data: item, error: itemErr } = await db
       .from('items')
-      .select('id, name, readable_id, selling_price, shopify_product_id, shopify_variant_id')
+      .select('id, name, readable_id, selling_price, status, shopify_product_id, shopify_variant_id')
       .eq('id', itemId)
       .single()
 
@@ -73,7 +91,7 @@ Deno.serve(async req => {
         userErrors: { field: string[]; message: string }[]
       }
     }>(PRODUCT_CREATE, {
-      input: { title: item.name, status: 'DRAFT' },
+      input: { title: item.name, status: 'DRAFT', vendor: 'Upstairs Garments' },
     })
 
     const { product, userErrors } = created.productCreate
@@ -83,6 +101,20 @@ Deno.serve(async req => {
 
     const variantId = product.variants.nodes[0]?.id
     if (variantId) {
+      // UGIS prices are SGD; the store's base currency is USD, and a raw
+      // variant price is interpreted in the store's own currency — convert
+      // or the listing goes live ~25% underpriced.
+      let priceUsd: number | undefined
+      if (item.selling_price != null) {
+        try {
+          priceUsd = await convertSgdToUsd(item.selling_price)
+        } catch (err) {
+          // Don't fail product creation over a currency API hiccup — leave
+          // price unset and let staff fill it in manually in Shopify.
+          console.error('[shopify-create-draft] currency conversion failed, leaving price unset', err)
+        }
+      }
+
       const updated = await shopifyGraphql<{
         productVariantsBulkUpdate: {
           productVariants: { id: string }[]
@@ -93,7 +125,7 @@ Deno.serve(async req => {
         variants: [
           {
             id: variantId,
-            price: item.selling_price ?? undefined,
+            price: priceUsd,
             inventoryItem: { sku: item.readable_id },
           },
         ],
@@ -104,6 +136,45 @@ Deno.serve(async req => {
         // staff fix it up directly in Shopify.
         console.error('[shopify-create-draft] variant update errors', updated.productVariantsBulkUpdate.userErrors)
       }
+    }
+
+    // Publish to every available sales channel. Products created via the API
+    // aren't scoped to any channel by default (unlike creating one by hand in
+    // the admin UI, where the active channels get auto-selected) — this
+    // still just leaves it a DRAFT, invisible everywhere, until staff
+    // publish it; it just means every channel is already ticked when they do.
+    // Requires the write_publications (+ read_publications) scope.
+    // One publishablePublish call PER channel rather than one batched call
+    // for all of them — some channels (third-party or custom ones
+    // especially) may not grant this app publish access even with the
+    // scope, and a single failing entry shouldn't be able to take the
+    // whole batch down with it. Best-effort throughout: the draft already
+    // exists by this point, so failures here just get logged, not thrown.
+    try {
+      const pubs = await shopifyGraphql<{ publications: { nodes: { id: string; name: string }[] } }>(ALL_PUBLICATIONS)
+      for (const pub of pubs.publications.nodes) {
+        try {
+          const published = await shopifyGraphql<{
+            publishablePublish: { userErrors: { field: string[]; message: string }[] }
+          }>(PUBLISH_TO_ALL_CHANNELS, { id: product.id, input: [{ publicationId: pub.id }] })
+          if (published.publishablePublish.userErrors.length > 0) {
+            console.error(`[shopify-create-draft] publish to "${pub.name}" errors`, published.publishablePublish.userErrors)
+          }
+        } catch (err) {
+          console.error(`[shopify-create-draft] failed to publish to "${pub.name}"`, err)
+        }
+      }
+    } catch (err) {
+      console.error('[shopify-create-draft] failed to list publications', err)
+    }
+
+    // Shop All / Sold Out based on the item's current status — same
+    // best-effort treatment; ongoing sync on later status changes is
+    // handled separately by shopify-sync-collection.
+    try {
+      await syncProductCollection(gidToId(product.id), item.status)
+    } catch (err) {
+      console.error('[shopify-create-draft] failed to sync collection', err)
     }
 
     const { error: updateErr } = await db

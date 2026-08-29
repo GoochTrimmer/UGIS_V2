@@ -1,11 +1,21 @@
 import { useState } from 'react'
+import { useMutationState } from '@tanstack/react-query'
 import { formatSeason } from '../../lib/idGenerator'
+import { SHOPIFY_LINKING_KEY } from '../../hooks/useItems'
 import StatusMenu from './StatusMenu'
 import Modal from '../ui/Modal'
 import ItemForm from './ItemForm'
 import DeleteItemDialog from './DeleteItemDialog'
 import ShopifyStatusDot from './ShopifyStatusDot'
 import type { Item } from '../../types'
+
+function usePendingShopifyLinkIds(): Set<string> {
+  const pending = useMutationState({
+    filters: { mutationKey: SHOPIFY_LINKING_KEY, status: 'pending' },
+    select: m => (m.state.variables as { itemId?: string } | undefined)?.itemId,
+  })
+  return new Set(pending.filter((id): id is string => !!id))
+}
 
 interface InventoryTableProps {
   items: Item[]
@@ -19,6 +29,7 @@ function fmt(amount: number | null | undefined): string {
 export default function InventoryTable({ items }: InventoryTableProps) {
   const [editing, setEditing] = useState<Item | null>(null)
   const [deleting, setDeleting] = useState<Item | null>(null)
+  const pendingShopifyLinkIds = usePendingShopifyLinkIds()
 
   if (!items.length) {
     return (
@@ -53,7 +64,7 @@ export default function InventoryTable({ items }: InventoryTableProps) {
               <tr key={item.id} className="hover:bg-surface-2/50 group">
                 <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">
                   <div className="flex items-center gap-1.5">
-                    <ShopifyStatusDot item={item} />
+                    <ShopifyStatusDot item={item} pending={pendingShopifyLinkIds.has(item.id)} />
                     {item.readable_id}
                   </div>
                 </td>
@@ -110,7 +121,7 @@ export default function InventoryTable({ items }: InventoryTableProps) {
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-white truncate leading-tight">{item.name}</p>
                 <p className="text-xs font-mono text-gray-500 leading-tight mt-0.5 flex items-center gap-1.5">
-                  <ShopifyStatusDot item={item} />
+                  <ShopifyStatusDot item={item} pending={pendingShopifyLinkIds.has(item.id)} />
                   {item.readable_id}{item.size ? <span className="text-gray-400"> · {item.size}</span> : null}
                 </p>
               </div>

@@ -7,7 +7,16 @@ type ShopifyLinkInfo = Pick<Item, 'shopify_product_id' | 'shopify_needs_finishin
 // linking/pushing, can drift if the listing changes directly in Shopify.
 // Closing that gap for real is the discrepancy-reconciliation job, still a
 // deferred phase.
-export default function ShopifyStatusDot({ item }: { item: ShopifyLinkInfo }) {
+export default function ShopifyStatusDot({ item, pending }: { item: ShopifyLinkInfo; pending?: boolean }) {
+  if (pending) {
+    return (
+      <span
+        className="inline-block w-2 h-2 rounded-full border border-gray-600 border-t-gray-300 shrink-0 animate-spin"
+        title="Syncing with Shopify…"
+      />
+    )
+  }
+
   if (!item.shopify_product_id) {
     return (
       <span
