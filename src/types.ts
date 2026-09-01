@@ -1,5 +1,19 @@
 export type SaleChannel = 'in_store' | 'website' | 'grailed' | 'carousell' | 'instagram' | 'other'
 export type SaleGeography = 'local' | 'overseas'
+export type PaymentType =
+  | 'cash'
+  | 'domestic_card'
+  | 'international_card'
+  | 'paynow'
+  | 'grabpay'
+  | 'paylater_grab'
+  | 'shopeepay'
+  | 'atome'
+  | 'shopback'
+  | 'wechatpay'
+  | 'alipay'
+  | 'upi'
+  | 'cdc_vouchers'
 
 export type ItemStatus =
   | 'in_stock'
@@ -46,6 +60,8 @@ export interface Item {
   sold_price: number | null
   sale_channel: SaleChannel | null
   sale_geography: SaleGeography | null
+  payment_type: PaymentType | null
+  card_fee: number | null
   size: string | null
   notes: string | null
   created_at: string
@@ -76,6 +92,8 @@ export interface ItemSnapshot {
   sold_price: number | null
   sale_channel: SaleChannel | null
   sale_geography: SaleGeography | null
+  payment_type: PaymentType | null
+  card_fee: number | null
   notes: string | null
   readable_id: string
   consignee_id: string | null

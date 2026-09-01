@@ -16,6 +16,8 @@ export function buildSnapshot(item: Item): ItemSnapshot {
     sold_price: item.sold_price,
     sale_channel: item.sale_channel,
     sale_geography: item.sale_geography,
+    payment_type: item.payment_type,
+    card_fee: item.card_fee,
     notes: item.notes,
     readable_id: item.readable_id,
     consignee_id: item.consignee_id,
@@ -41,6 +43,8 @@ export function computeDiff(
     sold_price: number | null
     sale_channel: string | null
     sale_geography: string | null
+    payment_type: string | null
+    card_fee: number | null
     notes: string | null
     consignee_id: string | null
     consignee: { id: string; name: string } | null
@@ -52,7 +56,7 @@ export function computeDiff(
   const scalar = [
     'name', 'size', 'status', 'season_year', 'season_period',
     'season_custom', 'cost_amount', 'takeback_price', 'selling_price', 'sold_price',
-    'sale_channel', 'sale_geography', 'notes',
+    'sale_channel', 'sale_geography', 'payment_type', 'card_fee', 'notes',
   ] as const
   for (const f of scalar) {
     const bv = before[f]

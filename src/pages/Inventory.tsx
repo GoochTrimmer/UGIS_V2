@@ -8,11 +8,21 @@ import ItemForm from '../components/inventory/ItemForm'
 import Spinner from '../components/ui/Spinner'
 import ShopifyStatusDot from '../components/inventory/ShopifyStatusDot'
 import { STATUS_CONFIG } from '../lib/constants'
+import type { SortState, ShopifyStatusValue } from '../components/inventory/sortState'
 import type { ItemFilters, ItemStatus } from '../types'
 
 export default function Inventory() {
   const [filters, setFilters] = useState<ItemFilters>({ status: 'in_stock' })
   const [addOpen, setAddOpen] = useState(false)
+  const [sort, setSort] = useState<SortState>(null)
+
+  const toggleShopifyStatusSort = (value: ShopifyStatusValue) => {
+    setSort(prev => {
+      const current = prev?.field === 'shopify_status' ? prev.values : []
+      const values = current.includes(value) ? current.filter(v => v !== value) : [...current, value]
+      return values.length > 0 ? { field: 'shopify_status', values } : null
+    })
+  }
 
   const { data: items = [], isLoading, isFetching, error } = useItems(filters)
   // Fetch without status filter so tab counts always reflect the full dataset
@@ -67,9 +77,21 @@ export default function Inventory() {
         <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
           <FilterBar filters={filters} onChange={setFilters} />
           <div className="flex items-center gap-3 text-xs text-gray-600 shrink-0">
-            <span className="flex items-center gap-1.5"><ShopifyStatusDot item={{ shopify_product_id: 'x', shopify_needs_finishing: false }} /> Live</span>
-            <span className="flex items-center gap-1.5"><ShopifyStatusDot item={{ shopify_product_id: 'x', shopify_needs_finishing: true }} /> Draft</span>
-            <span className="flex items-center gap-1.5"><ShopifyStatusDot item={{ shopify_product_id: null, shopify_needs_finishing: false }} /> Unlisted</span>
+            {([
+              { value: 'live', label: 'Live', item: { shopify_product_id: 'x', shopify_needs_finishing: false } },
+              { value: 'draft', label: 'Draft', item: { shopify_product_id: 'x', shopify_needs_finishing: true } },
+              { value: 'unlisted', label: 'Unlisted', item: { shopify_product_id: null, shopify_needs_finishing: false } },
+            ] as const).map(({ value, label, item }) => (
+              <button
+                key={value}
+                type="button"
+                title={`Sort by ${label}`}
+                onClick={() => toggleShopifyStatusSort(value)}
+                className={`flex items-center gap-1.5 transition-colors ${sort?.field === 'shopify_status' && sort.values.includes(value) ? 'text-white' : 'hover:text-gray-400'}`}
+              >
+                <ShopifyStatusDot item={item} /> {label}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -84,7 +106,7 @@ export default function Inventory() {
             <div className="text-sm text-red-400 px-4 py-8 text-center">{(error as Error).message}</div>
           )}
           {!isLoading && !error && (
-            <InventoryTable items={items} />
+            <InventoryTable items={items} sort={sort} onSortChange={setSort} />
           )}
         </div>
       </div>

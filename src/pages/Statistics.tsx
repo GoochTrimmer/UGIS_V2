@@ -10,7 +10,7 @@ import { useConsignees } from '../hooks/useConsignees'
 import Layout from '../components/layout/Layout'
 import Spinner from '../components/ui/Spinner'
 import MultiSelect from '../components/ui/MultiSelect'
-import { STATUS_CONFIG, SALE_CHANNEL_CONFIG, SALE_GEOGRAPHY_CONFIG } from '../lib/constants'
+import { STATUS_CONFIG, SALE_CHANNEL_CONFIG, SALE_GEOGRAPHY_CONFIG, PAYMENT_TYPE_CONFIG } from '../lib/constants'
 import type { Item, ItemStatus } from '../types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -159,7 +159,8 @@ export default function Statistics() {
 
     const salesRevenue    = sold.reduce((s, i) => s + (i.sold_price ?? i.selling_price ?? 0), 0)
     const costOfSales     = sold.reduce((s, i) => s + itemCost(i), 0)
-    const realizedProfit  = salesRevenue - costOfSales
+    const totalFees       = sold.reduce((s, i) => s + (i.card_fee ?? 0), 0)
+    const realizedProfit  = salesRevenue - costOfSales - totalFees
 
     return {
       totalItems: items.length,
@@ -170,6 +171,7 @@ export default function Statistics() {
       margin,
       salesRevenue,
       costOfSales,
+      totalFees,
       realizedProfit,
     }
   }, [items])
@@ -205,6 +207,22 @@ export default function Statistics() {
       const label = SALE_CHANNEL_CONFIG[key].label
       const prev = map.get(key) ?? { name: label, revenue: 0, count: 0 }
       map.set(key, { name: label, revenue: prev.revenue + (item.sold_price ?? item.selling_price ?? 0), count: prev.count + 1 })
+    }
+    return [...map.values()].sort((a, b) => b.revenue - a.revenue)
+  }, [items])
+
+  const paymentTypeChartData = useMemo(() => {
+    const map = new Map<string, { name: string; revenue: number; fees: number; count: number }>()
+    for (const item of items.filter(i => i.status === 'sold' && i.payment_type)) {
+      const key = item.payment_type!
+      const label = PAYMENT_TYPE_CONFIG[key].label
+      const prev = map.get(key) ?? { name: label, revenue: 0, fees: 0, count: 0 }
+      map.set(key, {
+        name: label,
+        revenue: prev.revenue + (item.sold_price ?? item.selling_price ?? 0),
+        fees: prev.fees + (item.card_fee ?? 0),
+        count: prev.count + 1,
+      })
     }
     return [...map.values()].sort((a, b) => b.revenue - a.revenue)
   }, [items])
@@ -354,9 +372,15 @@ export default function Statistics() {
           <StatCard label="Sales Revenue" value={fmtFull(metrics.salesRevenue)} sub="selling price · sold" />
           <StatCard label="Cost of Sales" value={fmtFull(metrics.costOfSales)} sub="cost / take-back · sold" />
           <StatCard
+            label="Processing Fees"
+            value={fmtFull(metrics.totalFees)}
+            sub="Cash & PayNow are fee-free"
+            tone={metrics.totalFees > 0 ? 'negative' : 'neutral'}
+          />
+          <StatCard
             label="Realised Profit"
             value={fmtFull(metrics.realizedProfit)}
-            sub="revenue minus cost of sales"
+            sub="revenue minus cost of sales minus fees"
             tone={metrics.realizedProfit > 0 ? 'positive' : metrics.realizedProfit < 0 ? 'negative' : 'neutral'}
           />
         </div>
@@ -561,6 +585,32 @@ export default function Statistics() {
               </>
             )}
           </ChartCard>
+        </div>
+
+        {/* Revenue & fees by payment type */}
+        <div className="card p-4 mt-4">
+          <div className="mb-4">
+            <p className="text-xs font-medium text-white">Revenue & Fees by Payment Type</p>
+            <p className="text-xs text-gray-600 mt-0.5">sold items · actual sold price vs. processing fee</p>
+          </div>
+          {paymentTypeChartData.length === 0 ? (
+            <p className="text-xs text-gray-600 text-center py-10">No payment type data recorded yet.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={Math.max(180, paymentTypeChartData.length * 34)}>
+              <BarChart data={paymentTypeChartData} layout="vertical" margin={{ left: 4, right: 20, top: 4, bottom: 4 }}>
+                <XAxis type="number" tick={{ fontSize: 10, fill: '#555' }} tickFormatter={fmtShort} axisLine={false} tickLine={false} />
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: '#888' }} width={120} axisLine={false} tickLine={false} />
+                <Tooltip
+                  {...TOOLTIP_STYLE}
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  formatter={(v: unknown, name: any) => [fmtFull(v as number), name === 'revenue' ? 'Revenue' : 'Fees'] as any}
+                  cursor={{ fill: 'rgba(255,255,255,0.03)' }}
+                />
+                <Bar dataKey="revenue" name="revenue" fill="#6366f1" radius={[0, 3, 3, 0]} maxBarSize={18} />
+                <Bar dataKey="fees"    name="fees"    fill="#f87171" radius={[0, 3, 3, 0]} maxBarSize={18} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
         </div>
 
       </div>

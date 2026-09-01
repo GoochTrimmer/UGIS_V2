@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { useItemMutations } from '../../hooks/useItems'
-import { STATUS_CONFIG, SALE_CHANNEL_CONFIG, SALE_GEOGRAPHY_CONFIG } from '../../lib/constants'
+import { STATUS_CONFIG, SALE_CHANNEL_CONFIG, SALE_GEOGRAPHY_CONFIG, PAYMENT_TYPE_CONFIG, paymentTypeHasFee } from '../../lib/constants'
 import StatusBadge from '../ui/StatusBadge'
 import Modal from '../ui/Modal'
-import type { ItemStatus, SaleChannel, SaleGeography } from '../../types'
+import type { ItemStatus, SaleChannel, SaleGeography, PaymentType } from '../../types'
 
 interface StatusMenuProps {
   itemId: string
@@ -17,6 +17,8 @@ export default function StatusMenu({ itemId, currentStatus, sellingPrice }: Stat
   const [soldInput, setSoldInput] = useState('')
   const [channel, setChannel] = useState<SaleChannel | ''>('')
   const [geography, setGeography] = useState<SaleGeography | ''>('')
+  const [paymentType, setPaymentType] = useState<PaymentType | ''>('')
+  const [cardFee, setCardFee] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const { updateStatus } = useItemMutations()
 
@@ -25,6 +27,8 @@ export default function StatusMenu({ itemId, currentStatus, sellingPrice }: Stat
       setSoldInput(sellingPrice != null ? String(sellingPrice) : '')
       setChannel('')
       setGeography('')
+      setPaymentType('')
+      setCardFee('')
       setTimeout(() => inputRef.current?.select(), 50)
     }
   }, [soldPrompt, sellingPrice])
@@ -42,6 +46,8 @@ export default function StatusMenu({ itemId, currentStatus, sellingPrice }: Stat
       sold_price: soldInput ? parseFloat(soldInput) : null,
       sale_channel: channel || null,
       sale_geography: geography || null,
+      payment_type: paymentType || null,
+      card_fee: paymentTypeHasFee(paymentType) && cardFee ? parseFloat(cardFee) : null,
     })
     setSoldPrompt(false)
   }
@@ -124,6 +130,37 @@ export default function StatusMenu({ itemId, currentStatus, sellingPrice }: Stat
                 ))}
               </select>
             </div>
+          </div>
+
+          {/* Payment type + fee — Cash and PayNow are processed with no fee, everything else routes through HitPay */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Payment Type</label>
+              <select className="input" value={paymentType} onChange={e => setPaymentType(e.target.value as PaymentType | '')}>
+                <option value="">— unknown —</option>
+                {(Object.entries(PAYMENT_TYPE_CONFIG) as [PaymentType, { label: string }][]).map(([k, v]) => (
+                  <option key={k} value={k}>{v.label}</option>
+                ))}
+              </select>
+            </div>
+            {paymentTypeHasFee(paymentType) && (
+              <div>
+                <label className="label">Fee</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">$</span>
+                  <input
+                    className="input pl-7"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
+                    value={cardFee}
+                    onChange={e => setCardFee(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') void confirmSale() }}
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex gap-2 justify-end pt-1">

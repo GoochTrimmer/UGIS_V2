@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutationState } from '@tanstack/react-query'
 import { formatSeason } from '../../lib/idGenerator'
 import { SHOPIFY_LINKING_KEY } from '../../hooks/useItems'
@@ -8,6 +8,8 @@ import ItemForm from './ItemForm'
 import DeleteItemDialog from './DeleteItemDialog'
 import ShopifyStatusDot from './ShopifyStatusDot'
 import type { Item } from '../../types'
+import type { SortState } from './sortState'
+import { shopifyStatusOf } from './sortState'
 
 function usePendingShopifyLinkIds(): Set<string> {
   const pending = useMutationState({
@@ -19,6 +21,8 @@ function usePendingShopifyLinkIds(): Set<string> {
 
 interface InventoryTableProps {
   items: Item[]
+  sort: SortState
+  onSortChange: (updater: SortState | ((prev: SortState) => SortState)) => void
 }
 
 function fmt(amount: number | null | undefined): string {
@@ -26,10 +30,73 @@ function fmt(amount: number | null | undefined): string {
   return new Intl.NumberFormat('en-SG', { style: 'currency', currency: 'SGD', maximumFractionDigits: 0 }).format(amount)
 }
 
-export default function InventoryTable({ items }: InventoryTableProps) {
+function priceOf(item: Item): number {
+  return (item.status === 'sold' && item.sold_price != null ? item.sold_price : item.selling_price) ?? 0
+}
+
+function costOf(item: Item): number {
+  return (item.consignee && !item.consignee.is_default_store ? item.takeback_price : item.cost_amount) ?? 0
+}
+
+// Small funnel glyph shown on an unsorted sortable column, so it reads as
+// "click to filter/sort" rather than a plain label — swaps for a ▲/▼ once
+// that column is actually driving the sort.
+function SortIcon({ direction }: { direction: 'asc' | 'desc' | null }) {
+  if (direction === 'asc') return <span className="text-[9px] leading-none">▲</span>
+  if (direction === 'desc') return <span className="text-[9px] leading-none">▼</span>
+  return (
+    <svg width="10" height="10" viewBox="0 0 16 16" className="opacity-50 shrink-0">
+      <path d="M2 3h12l-4.5 5.5V13l-3 1.5V8.5L2 3z" fill="currentColor" />
+    </svg>
+  )
+}
+
+function SortableHeader({ label, active, dir, onClick }: {
+  label: string
+  active: boolean
+  dir: 'asc' | 'desc'
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex items-center gap-1 ml-auto transition-colors ${active ? 'text-white' : 'text-gray-600 hover:text-gray-300'}`}
+    >
+      {label}
+      <SortIcon direction={active ? dir : null} />
+    </button>
+  )
+}
+
+export default function InventoryTable({ items, sort, onSortChange }: InventoryTableProps) {
   const [editing, setEditing] = useState<Item | null>(null)
   const [deleting, setDeleting] = useState<Item | null>(null)
   const pendingShopifyLinkIds = usePendingShopifyLinkIds()
+
+  const sortedItems = useMemo(() => {
+    if (!sort) return items
+    if (sort.field === 'shopify_status') {
+      // items matching any selected status float to the top, stable otherwise
+      const values = sort.values
+      return [...items].sort((a, b) => {
+        const aMatch = values.includes(shopifyStatusOf(a)) ? 0 : 1
+        const bMatch = values.includes(shopifyStatusOf(b)) ? 0 : 1
+        return aMatch - bMatch
+      })
+    }
+    const valueOf = sort.field === 'price' ? priceOf : costOf
+    const factor = sort.dir === 'asc' ? 1 : -1
+    return [...items].sort((a, b) => factor * (valueOf(a) - valueOf(b)))
+  }, [items, sort])
+
+  const toggleSort = (field: 'price' | 'cost') => {
+    onSortChange(prev => {
+      if (!prev || prev.field !== field) return { field, dir: 'asc' }
+      if (prev.dir === 'asc') return { field, dir: 'desc' }
+      return null
+    })
+  }
 
   if (!items.length) {
     return (
@@ -54,13 +121,27 @@ export default function InventoryTable({ items }: InventoryTableProps) {
               <th className="px-4 py-2.5 font-medium w-20">Season</th>
               <th className="px-4 py-2.5 font-medium w-32">Status</th>
               <th className="px-4 py-2.5 font-medium w-28">Consignee</th>
-              <th className="px-4 py-2.5 font-medium w-24 text-right">Cost</th>
-              <th className="px-4 py-2.5 font-medium w-24 text-right">Price</th>
+              <th className="px-4 py-2.5 font-medium w-24 text-right">
+                <SortableHeader
+                  label="Cost"
+                  active={sort?.field === 'cost'}
+                  dir={sort?.field === 'cost' ? sort.dir : 'asc'}
+                  onClick={() => toggleSort('cost')}
+                />
+              </th>
+              <th className="px-4 py-2.5 font-medium w-24 text-right">
+                <SortableHeader
+                  label="Price"
+                  active={sort?.field === 'price'}
+                  dir={sort?.field === 'price' ? sort.dir : 'asc'}
+                  onClick={() => toggleSort('price')}
+                />
+              </th>
               <th className="px-4 py-2.5 font-medium w-16" />
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {items.map(item => (
+            {sortedItems.map(item => (
               <tr key={item.id} className="hover:bg-surface-2/50 group">
                 <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">
                   <div className="flex items-center gap-1.5">
@@ -96,6 +177,9 @@ export default function InventoryTable({ items }: InventoryTableProps) {
                       {item.sold_price !== item.selling_price && item.selling_price != null && (
                         <div className="text-gray-600 line-through">{fmt(item.selling_price)}</div>
                       )}
+                      {item.card_fee != null && (
+                        <div className="text-red-400/80" title="Card fee">-{fmt(item.card_fee)}</div>
+                      )}
                     </div>
                   ) : (
                     <span className="text-white font-medium">{fmt(item.selling_price)}</span>
@@ -115,7 +199,7 @@ export default function InventoryTable({ items }: InventoryTableProps) {
 
       {/* Mobile cards */}
       <div className="md:hidden divide-y divide-border">
-        {items.map(item => (
+        {sortedItems.map(item => (
           <div key={item.id} className="px-4 py-3 hover:bg-surface-2/30">
             <div className="flex items-start justify-between gap-2 mb-1">
               <div className="flex-1 min-w-0">

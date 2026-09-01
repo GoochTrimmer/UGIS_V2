@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase'
 import { generateReadableId } from '../lib/idGenerator'
 import { buildSnapshot, computeDiff, writeItemLog } from '../lib/itemLog'
 import { invokeEdgeFunction } from '../lib/edgeFunctions'
-import type { Item, Brand, Consignee, ItemFilters, ItemStatus, ItemSnapshot, SaleChannel, SaleGeography } from '../types'
+import type { Item, Brand, Consignee, ItemFilters, ItemStatus, ItemSnapshot, SaleChannel, SaleGeography, PaymentType } from '../types'
 
 const ITEM_SELECT = `
   *,
@@ -101,6 +101,8 @@ interface CreateItemInput {
   sold_price: number | null
   sale_channel: SaleChannel | null
   sale_geography: SaleGeography | null
+  payment_type: PaymentType | null
+  card_fee: number | null
   notes: string | null
   // Optional — omitted entirely (not just `undefined`) by callers like the
   // Logs revert flow that don't want to touch Shopify link state.
@@ -188,6 +190,8 @@ export function useItemMutations() {
         sold_price: item.sold_price,
         sale_channel: item.sale_channel,
         sale_geography: item.sale_geography,
+        payment_type: item.payment_type,
+        card_fee: item.card_fee,
         notes: item.notes,
         readable_id: readableId,
         consignee_id: item.consignee_id,
@@ -261,12 +265,14 @@ export function useItemMutations() {
   })
 
   const updateStatus = useMutation({
-    mutationFn: async ({ id, status, sold_price, sale_channel, sale_geography }: {
+    mutationFn: async ({ id, status, sold_price, sale_channel, sale_geography, payment_type, card_fee }: {
       id: string
       status: ItemStatus
       sold_price?: number | null
       sale_channel?: SaleChannel | null
       sale_geography?: SaleGeography | null
+      payment_type?: PaymentType | null
+      card_fee?: number | null
     }) => {
       const { data: currentRaw } = await supabase.from('items').select(ITEM_SELECT).eq('id', id).single()
       const currentItem = currentRaw ? normalizeItem(currentRaw as unknown as RawItem) : null
@@ -275,6 +281,8 @@ export function useItemMutations() {
       if (sold_price !== undefined) patch.sold_price = sold_price
       if (sale_channel !== undefined) patch.sale_channel = sale_channel
       if (sale_geography !== undefined) patch.sale_geography = sale_geography
+      if (payment_type !== undefined) patch.payment_type = payment_type
+      if (card_fee !== undefined) patch.card_fee = card_fee
 
       const { error } = await supabase.from('items').update(patch).eq('id', id)
       if (error) throw error
@@ -291,6 +299,12 @@ export function useItemMutations() {
         }
         if (sale_geography !== undefined && currentItem.sale_geography !== sale_geography) {
           changes.sale_geography = { from: currentItem.sale_geography, to: sale_geography }
+        }
+        if (payment_type !== undefined && currentItem.payment_type !== payment_type) {
+          changes.payment_type = { from: currentItem.payment_type, to: payment_type }
+        }
+        if (card_fee !== undefined && currentItem.card_fee !== card_fee) {
+          changes.card_fee = { from: currentItem.card_fee, to: card_fee }
         }
         if (Object.keys(changes).length > 0) {
           await writeItemLog({ item_id: id, item_name: currentItem.name, field_changes: changes, snapshot_before: snapshot })

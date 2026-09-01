@@ -92,6 +92,8 @@ export default function Logs() {
         sold_price: s.sold_price,
         sale_channel: s.sale_channel,
         sale_geography: s.sale_geography,
+        payment_type: s.payment_type,
+        card_fee: s.card_fee,
         notes: s.notes,
         consignee_id: s.consignee_id,
         brands: s.brands,

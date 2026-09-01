@@ -10,8 +10,8 @@ import Modal from '../ui/Modal'
 import Confirm from '../ui/Confirm'
 import BrandForm from '../brands/BrandForm'
 import ConsigneeForm from '../consignees/ConsigneeForm'
-import { STATUS_CONFIG, SEASON_PERIODS, YEAR_OPTIONS, SALE_CHANNEL_CONFIG, SALE_GEOGRAPHY_CONFIG } from '../../lib/constants'
-import type { Item, Brand, ItemStatus, SeasonPeriod, SaleChannel, SaleGeography } from '../../types'
+import { STATUS_CONFIG, SEASON_PERIODS, YEAR_OPTIONS, SALE_CHANNEL_CONFIG, SALE_GEOGRAPHY_CONFIG, PAYMENT_TYPE_CONFIG, paymentTypeHasFee } from '../../lib/constants'
+import type { Item, Brand, ItemStatus, SeasonPeriod, SaleChannel, SaleGeography, PaymentType } from '../../types'
 
 // datetime-local <-> ISO helpers (datetime-local has no timezone; treated as local time)
 function isoToDatetimeLocal(iso: string | null): string {
@@ -52,6 +52,8 @@ interface ItemFormValues {
   sold_price: string
   sale_channel: SaleChannel | ''
   sale_geography: SaleGeography | ''
+  payment_type: PaymentType | ''
+  card_fee: string
   notes: string
   ready_to_list: boolean
   scheduled_drop_at: string
@@ -79,7 +81,8 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
     defaultValues: {
       name: '', size: '', status: 'in_stock', season_year: '', season_period: 'SS',
       season_custom: '', consignee_id: '', cost_amount: '', takeback_price: '',
-      selling_price: '', sold_price: '', sale_channel: '', sale_geography: '', notes: '',
+      selling_price: '', sold_price: '', sale_channel: '', sale_geography: '',
+      payment_type: '', card_fee: '', notes: '',
       ready_to_list: false, scheduled_drop_at: '',
     }
   })
@@ -92,6 +95,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
   const seasonPeriod = watch('season_period')
   const watchedConsigneeId = watch('consignee_id')
   const watchedStatus = watch('status')
+  const watchedPaymentType = watch('payment_type')
   const sizeReg = register('size')
 
   useEffect(() => {
@@ -112,6 +116,8 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
         sold_price: item.sold_price ? String(item.sold_price) : '',
         sale_channel: (item.sale_channel ?? '') as SaleChannel | '',
         sale_geography: (item.sale_geography ?? '') as SaleGeography | '',
+        payment_type: (item.payment_type ?? '') as PaymentType | '',
+        card_fee: item.card_fee ? String(item.card_fee) : '',
         notes: item.notes ?? '',
         ready_to_list: item.ready_to_list,
         scheduled_drop_at: isoToDatetimeLocal(item.scheduled_drop_at),
@@ -171,6 +177,8 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       sold_price: data.status === 'sold' && data.sold_price ? parseFloat(data.sold_price) : null,
       sale_channel: (data.status === 'sold' && data.sale_channel) ? data.sale_channel : null,
       sale_geography: (data.status === 'sold' && data.sale_geography) ? data.sale_geography : null,
+      payment_type: (data.status === 'sold' && data.payment_type) ? data.payment_type : null,
+      card_fee: data.status === 'sold' && paymentTypeHasFee(data.payment_type) && data.card_fee ? parseFloat(data.card_fee) : null,
       notes: data.notes.trim() || null,
       ready_to_list: data.ready_to_list,
       scheduled_drop_at: datetimeLocalToIso(data.scheduled_drop_at),
@@ -420,6 +428,23 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
                 ))}
               </select>
             </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="label">Payment Type</label>
+              <select className="input" {...register('payment_type')}>
+                <option value="">— unknown —</option>
+                {(Object.entries(PAYMENT_TYPE_CONFIG) as [PaymentType, { label: string }][]).map(([k, v]) => (
+                  <option key={k} value={k}>{v.label}</option>
+                ))}
+              </select>
+            </div>
+            {paymentTypeHasFee(watchedPaymentType) && (
+              <div>
+                <label className="label">Fee</label>
+                <input className="input" type="number" step="0.01" {...register('card_fee')} placeholder="0.00" />
+              </div>
+            )}
           </div>
         </div>
       )}

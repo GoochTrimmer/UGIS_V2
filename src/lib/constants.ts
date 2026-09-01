@@ -1,4 +1,4 @@
-import type { ItemStatus, SeasonPeriod, SaleChannel, SaleGeography } from '../types'
+import type { ItemStatus, SeasonPeriod, SaleChannel, SaleGeography, PaymentType } from '../types'
 
 export const STATUS_CONFIG: Record<ItemStatus, { label: string; color: string }> = {
   in_stock:         { label: 'In Stock',         color: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
@@ -24,6 +24,31 @@ export const SALE_CHANNEL_CONFIG: Record<SaleChannel, { label: string }> = {
 export const SALE_GEOGRAPHY_CONFIG: Record<SaleGeography, { label: string; color: string }> = {
   local:    { label: 'Local',    color: '#6366f1' },
   overseas: { label: 'Overseas', color: '#14b8a6' },
+}
+
+export const PAYMENT_TYPE_CONFIG: Record<PaymentType, { label: string }> = {
+  cash:                { label: 'Cash' },
+  domestic_card:       { label: 'Domestic Card' },
+  international_card:  { label: 'International Card' },
+  paynow:              { label: 'PayNow' },
+  grabpay:             { label: 'GrabPay' },
+  paylater_grab:       { label: 'Paylater by Grab' },
+  shopeepay:           { label: 'ShopeePay' },
+  atome:               { label: 'Atome' },
+  shopback:            { label: 'ShopBack' },
+  wechatpay:           { label: 'WeChat Pay' },
+  alipay:              { label: 'AliPay' },
+  upi:                 { label: 'UPI' },
+  cdc_vouchers:        { label: 'CDC Vouchers' },
+}
+
+// Cash has no processing fee by nature; PayNow is processed directly rather
+// than through HitPay, so it's fee-free too (unlike everything else here,
+// which does route through HitPay and carries a fee).
+export const FEE_FREE_PAYMENT_TYPES: PaymentType[] = ['cash', 'paynow', 'cdc_vouchers']
+
+export function paymentTypeHasFee(paymentType: PaymentType | '' | null | undefined): boolean {
+  return !!paymentType && !FEE_FREE_PAYMENT_TYPES.includes(paymentType)
 }
 
 export const CURRENT_YEAR = new Date().getFullYear()
