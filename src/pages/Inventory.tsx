@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useItems } from '../hooks/useItems'
 import Layout from '../components/layout/Layout'
 import FilterBar from '../components/inventory/FilterBar'
@@ -15,12 +15,35 @@ export default function Inventory() {
   const [filters, setFilters] = useState<ItemFilters>({ status: 'in_stock' })
   const [addOpen, setAddOpen] = useState(false)
   const [sort, setSort] = useState<SortState>(null)
+  const [bulkMode, setBulkMode] = useState(false)
+
+  // Escape exits bulk-edit mode, same as it closes a modal — a familiar
+  // "back out of this" gesture, and the button label below advertises it.
+  useEffect(() => {
+    if (!bulkMode) return
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') setBulkMode(false) }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [bulkMode])
+
+  const emptyFlags = { field: 'flags' as const, shopifyStatuses: [] as ShopifyStatusValue[], incomplete: false }
 
   const toggleShopifyStatusSort = (value: ShopifyStatusValue) => {
     setSort(prev => {
-      const current = prev?.field === 'shopify_status' ? prev.values : []
-      const values = current.includes(value) ? current.filter(v => v !== value) : [...current, value]
-      return values.length > 0 ? { field: 'shopify_status', values } : null
+      const base = prev?.field === 'flags' ? prev : emptyFlags
+      const shopifyStatuses = base.shopifyStatuses.includes(value)
+        ? base.shopifyStatuses.filter(v => v !== value)
+        : [...base.shopifyStatuses, value]
+      const next = { ...base, shopifyStatuses }
+      return next.shopifyStatuses.length > 0 || next.incomplete ? next : null
+    })
+  }
+
+  const toggleIncompleteSort = () => {
+    setSort(prev => {
+      const base = prev?.field === 'flags' ? prev : emptyFlags
+      const next = { ...base, incomplete: !base.incomplete }
+      return next.shopifyStatuses.length > 0 || next.incomplete ? next : null
     })
   }
 
@@ -46,6 +69,13 @@ export default function Inventory() {
             <p className="text-xs text-gray-600 mt-0.5">{items.length} item{items.length !== 1 ? 's' : ''}</p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className={`btn ${bulkMode ? 'bg-amber-500 text-black hover:bg-amber-400 focus:ring-amber-400' : 'bg-surface-2 text-gray-300 border border-border hover:bg-surface-3'}`}
+              onClick={() => setBulkMode(m => !m)}
+            >
+              {bulkMode ? '⎋ Esc to Exit' : '✎ Edit Items'}
+            </button>
             <button className="btn-primary" onClick={() => setAddOpen(true)}>
               + Add Item
             </button>
@@ -87,11 +117,19 @@ export default function Inventory() {
                 type="button"
                 title={`Sort by ${label}`}
                 onClick={() => toggleShopifyStatusSort(value)}
-                className={`flex items-center gap-1.5 transition-colors ${sort?.field === 'shopify_status' && sort.values.includes(value) ? 'text-white' : 'hover:text-gray-400'}`}
+                className={`flex items-center gap-1.5 transition-colors ${sort?.field === 'flags' && sort.shopifyStatuses.includes(value) ? 'text-white' : 'hover:text-gray-400'}`}
               >
                 <ShopifyStatusDot item={item} /> {label}
               </button>
             ))}
+            <button
+              type="button"
+              title="Sort by items missing important fields"
+              onClick={toggleIncompleteSort}
+              className={`flex items-center gap-1.5 transition-colors ${sort?.field === 'flags' && sort.incomplete ? 'text-white' : 'hover:text-gray-400'}`}
+            >
+              <span className="text-amber-400">⚠</span> Incomplete
+            </button>
           </div>
         </div>
 
@@ -106,7 +144,7 @@ export default function Inventory() {
             <div className="text-sm text-red-400 px-4 py-8 text-center">{(error as Error).message}</div>
           )}
           {!isLoading && !error && (
-            <InventoryTable items={items} sort={sort} onSortChange={setSort} />
+            <InventoryTable items={items} sort={sort} onSortChange={setSort} bulkMode={bulkMode} />
           )}
         </div>
       </div>

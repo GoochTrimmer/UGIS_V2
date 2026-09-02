@@ -146,6 +146,86 @@ async function syncShopifyCollectionIfNeeded(
 // pending-state dot.
 export const SHOPIFY_LINKING_KEY = ['shopify-linking']
 
+// Plain (non-hook) versions of the three write paths BulkActionsBar drives
+// in a loop. Pulled out of useItemMutations() so bulk actions can call them
+// directly and invalidate the cache ONCE after the whole batch finishes,
+// rather than going through useMutation's per-call onSuccess — which would
+// otherwise invalidate (and refetch) after every single item, producing a
+// visible fade-in/out flicker between each one.
+
+export async function updateItemStatus({ id, status, sold_price, sale_channel, sale_geography, payment_type, card_fee }: {
+  id: string
+  status: ItemStatus
+  sold_price?: number | null
+  sale_channel?: SaleChannel | null
+  sale_geography?: SaleGeography | null
+  payment_type?: PaymentType | null
+  card_fee?: number | null
+}): Promise<void> {
+  const { data: currentRaw } = await supabase.from('items').select(ITEM_SELECT).eq('id', id).single()
+  const currentItem = currentRaw ? normalizeItem(currentRaw as unknown as RawItem) : null
+
+  const patch: Record<string, unknown> = { status }
+  if (sold_price !== undefined) patch.sold_price = sold_price
+  if (sale_channel !== undefined) patch.sale_channel = sale_channel
+  if (sale_geography !== undefined) patch.sale_geography = sale_geography
+  if (payment_type !== undefined) patch.payment_type = payment_type
+  if (card_fee !== undefined) patch.card_fee = card_fee
+
+  const { error } = await supabase.from('items').update(patch).eq('id', id)
+  if (error) throw error
+
+  if (currentItem) {
+    const snapshot = buildSnapshot(currentItem)
+    const changes: Record<string, { from: unknown; to: unknown }> = {}
+    if (currentItem.status !== status) changes.status = { from: currentItem.status, to: status }
+    if (sold_price !== undefined && currentItem.sold_price !== sold_price) {
+      changes.sold_price = { from: currentItem.sold_price, to: sold_price }
+    }
+    if (sale_channel !== undefined && currentItem.sale_channel !== sale_channel) {
+      changes.sale_channel = { from: currentItem.sale_channel, to: sale_channel }
+    }
+    if (sale_geography !== undefined && currentItem.sale_geography !== sale_geography) {
+      changes.sale_geography = { from: currentItem.sale_geography, to: sale_geography }
+    }
+    if (payment_type !== undefined && currentItem.payment_type !== payment_type) {
+      changes.payment_type = { from: currentItem.payment_type, to: payment_type }
+    }
+    if (card_fee !== undefined && currentItem.card_fee !== card_fee) {
+      changes.card_fee = { from: currentItem.card_fee, to: card_fee }
+    }
+    if (Object.keys(changes).length > 0) {
+      await writeItemLog({ item_id: id, item_name: currentItem.name, field_changes: changes, snapshot_before: snapshot })
+    }
+    await syncShopifyCollectionIfNeeded(currentItem.status, status, currentItem.shopify_product_id, currentItem.shopify_variant_id)
+  }
+}
+
+export async function deleteItem(id: string): Promise<void> {
+  const { data: currentRaw } = await supabase.from('items').select(ITEM_SELECT).eq('id', id).single()
+  const currentItem = currentRaw ? normalizeItem(currentRaw as unknown as RawItem) : null
+
+  // Log BEFORE deleting — FK constraint requires the item to still exist at insert time.
+  // After deletion, ON DELETE SET NULL will null out item_id automatically.
+  if (currentItem) {
+    await writeItemLog({
+      item_id: id,
+      item_name: currentItem.name,
+      field_changes: { _action: { from: null, to: 'deleted' } },
+      snapshot_before: buildSnapshot(currentItem),
+    })
+  }
+
+  const { error } = await supabase.from('items').delete().eq('id', id)
+  if (error) throw error
+}
+
+export async function pushItemShopifyDraft(itemId: string): Promise<unknown> {
+  const { data, error } = await invokeEdgeFunction('shopify-create-draft', { itemId })
+  if (error) throw new Error(error)
+  return data
+}
+
 export function useItemMutations() {
   const qc = useQueryClient()
   const invalidate = () => qc.invalidateQueries({ queryKey: ['items'] })
@@ -265,53 +345,7 @@ export function useItemMutations() {
   })
 
   const updateStatus = useMutation({
-    mutationFn: async ({ id, status, sold_price, sale_channel, sale_geography, payment_type, card_fee }: {
-      id: string
-      status: ItemStatus
-      sold_price?: number | null
-      sale_channel?: SaleChannel | null
-      sale_geography?: SaleGeography | null
-      payment_type?: PaymentType | null
-      card_fee?: number | null
-    }) => {
-      const { data: currentRaw } = await supabase.from('items').select(ITEM_SELECT).eq('id', id).single()
-      const currentItem = currentRaw ? normalizeItem(currentRaw as unknown as RawItem) : null
-
-      const patch: Record<string, unknown> = { status }
-      if (sold_price !== undefined) patch.sold_price = sold_price
-      if (sale_channel !== undefined) patch.sale_channel = sale_channel
-      if (sale_geography !== undefined) patch.sale_geography = sale_geography
-      if (payment_type !== undefined) patch.payment_type = payment_type
-      if (card_fee !== undefined) patch.card_fee = card_fee
-
-      const { error } = await supabase.from('items').update(patch).eq('id', id)
-      if (error) throw error
-
-      if (currentItem) {
-        const snapshot = buildSnapshot(currentItem)
-        const changes: Record<string, { from: unknown; to: unknown }> = {}
-        if (currentItem.status !== status) changes.status = { from: currentItem.status, to: status }
-        if (sold_price !== undefined && currentItem.sold_price !== sold_price) {
-          changes.sold_price = { from: currentItem.sold_price, to: sold_price }
-        }
-        if (sale_channel !== undefined && currentItem.sale_channel !== sale_channel) {
-          changes.sale_channel = { from: currentItem.sale_channel, to: sale_channel }
-        }
-        if (sale_geography !== undefined && currentItem.sale_geography !== sale_geography) {
-          changes.sale_geography = { from: currentItem.sale_geography, to: sale_geography }
-        }
-        if (payment_type !== undefined && currentItem.payment_type !== payment_type) {
-          changes.payment_type = { from: currentItem.payment_type, to: payment_type }
-        }
-        if (card_fee !== undefined && currentItem.card_fee !== card_fee) {
-          changes.card_fee = { from: currentItem.card_fee, to: card_fee }
-        }
-        if (Object.keys(changes).length > 0) {
-          await writeItemLog({ item_id: id, item_name: currentItem.name, field_changes: changes, snapshot_before: snapshot })
-        }
-        await syncShopifyCollectionIfNeeded(currentItem.status, status, currentItem.shopify_product_id, currentItem.shopify_variant_id)
-      }
-    },
+    mutationFn: updateItemStatus,
     onSuccess: () => {
       invalidate()
       invalidateLogs()
@@ -319,24 +353,7 @@ export function useItemMutations() {
   })
 
   const remove = useMutation({
-    mutationFn: async (id: string) => {
-      const { data: currentRaw } = await supabase.from('items').select(ITEM_SELECT).eq('id', id).single()
-      const currentItem = currentRaw ? normalizeItem(currentRaw as unknown as RawItem) : null
-
-      // Log BEFORE deleting — FK constraint requires the item to still exist at insert time.
-      // After deletion, ON DELETE SET NULL will null out item_id automatically.
-      if (currentItem) {
-        await writeItemLog({
-          item_id: id,
-          item_name: currentItem.name,
-          field_changes: { _action: { from: null, to: 'deleted' } },
-          snapshot_before: buildSnapshot(currentItem),
-        })
-      }
-
-      const { error } = await supabase.from('items').delete().eq('id', id)
-      if (error) throw error
-    },
+    mutationFn: deleteItem,
     onSuccess: () => {
       invalidate()
       invalidateLogs()
@@ -377,11 +394,7 @@ export function useItemMutations() {
 
   const pushShopifyDraft = useMutation({
     mutationKey: SHOPIFY_LINKING_KEY,
-    mutationFn: async ({ itemId }: { itemId: string }) => {
-      const { data, error } = await invokeEdgeFunction('shopify-create-draft', { itemId })
-      if (error) throw new Error(error)
-      return data
-    },
+    mutationFn: ({ itemId }: { itemId: string }) => pushItemShopifyDraft(itemId),
     onSuccess: (_, { itemId }) => {
       invalidate()
       qc.invalidateQueries({ queryKey: ['item', itemId] })
@@ -401,5 +414,30 @@ export function useItemMutations() {
     },
   })
 
-  return { create, update, updateStatus, remove, markShopifyFinished, unbindShopify, pushShopifyDraft, linkShopifyProduct }
+  // Unconditionally pushes a status to Shopify, unlike the sync inside
+  // update/updateStatus which only fires on an actual UGIS-side transition.
+  // Needed for resolving a discrepancy in UGIS's favour (spec Phase 3) —
+  // there the UGIS status isn't changing at all, Shopify is the side that
+  // drifted, so the normal old-status/new-status sync would silently skip
+  // pushing anything and the mismatch would just reopen on the next scan.
+  const forceSyncShopifyStatus = useMutation({
+    mutationFn: async ({ status, shopifyProductId, shopifyVariantId }: {
+      status: ItemStatus
+      shopifyProductId: string | null
+      shopifyVariantId: string | null
+    }) => {
+      if (!shopifyProductId) return
+      const { error } = await invokeEdgeFunction('shopify-sync-item-status', {
+        productId: shopifyProductId,
+        variantId: shopifyVariantId,
+        status,
+      })
+      if (error) throw new Error(error)
+    },
+  })
+
+  return {
+    create, update, updateStatus, remove, markShopifyFinished, unbindShopify,
+    pushShopifyDraft, linkShopifyProduct, forceSyncShopifyStatus,
+  }
 }

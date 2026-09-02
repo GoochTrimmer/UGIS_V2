@@ -25,7 +25,7 @@ export function formatSeason(
   custom?: string | null,
 ): string {
   if (!period || period === 'NA') return 'NA'
-  if (period === 'Custom') return custom || '—'
+  if (period === 'Custom') return custom || 'N/A'
   if (!year) return period
   const shortYear = String(year).slice(-2)
   if (period === 'Resort' || period === 'Pre-Fall') return `${period} ${shortYear}`

@@ -112,6 +112,31 @@ export interface ItemLog {
   reverted: boolean
 }
 
+export type ReconciliationRunStatus = 'running' | 'completed' | 'failed'
+
+export interface ReconciliationRun {
+  id: string
+  started_at: string
+  finished_at: string | null
+  status: ReconciliationRunStatus
+  items_scanned: number | null
+  discrepancies_opened: number | null
+  discrepancies_closed: number | null
+  error: string | null
+}
+
+export interface ShopifyDiscrepancy {
+  id: string
+  item_id: string
+  ugis_status: ItemStatus
+  shopify_available_quantity: number | null
+  detected_at: string
+  resolved_at: string | null
+  resolved_status: ItemStatus | null
+  auto_resolved: boolean
+  item: Pick<Item, 'id' | 'readable_id' | 'name' | 'status' | 'shopify_admin_url' | 'shopify_product_id' | 'shopify_variant_id'> | null
+}
+
 export interface ItemFilters {
   status?: ItemStatus
   consignee_id?: string

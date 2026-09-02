@@ -17,7 +17,7 @@ const PRIMARY_LOCATION = `
   }
 `
 
-async function getPrimaryLocationId(): Promise<string> {
+export async function getPrimaryLocationId(): Promise<string> {
   if (cachedLocationId) return cachedLocationId
   const data = await shopifyGraphql<{ locations: { nodes: { id: string }[] } }>(PRIMARY_LOCATION)
   const id = data.locations.nodes[0]?.id
