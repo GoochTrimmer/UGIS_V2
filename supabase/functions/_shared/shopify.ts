@@ -140,3 +140,10 @@ export function adminProductUrl(productId: string): string {
   const storeHandle = domain.replace(/\.myshopify\.com$/, '')
   return `https://admin.shopify.com/store/${storeHandle}/products/${gidToId(productId)}`
 }
+
+/** Admin order URL, given its numeric or GID id — same shape as adminProductUrl above. */
+export function adminOrderUrl(orderId: string): string {
+  const domain = Deno.env.get('SHOPIFY_STORE_DOMAIN') ?? ''
+  const storeHandle = domain.replace(/\.myshopify\.com$/, '')
+  return `https://admin.shopify.com/store/${storeHandle}/orders/${gidToId(orderId)}`
+}

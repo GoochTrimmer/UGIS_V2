@@ -3,9 +3,9 @@ import { useForm } from 'react-hook-form'
 import { useItemMutations } from '../../hooks/useItems'
 import { useConsignees } from '../../hooks/useConsignees'
 import { useBrands } from '../../hooks/useBrands'
-import { useAnimatedDots } from '../../hooks/useAnimatedDots'
 import { invokeEdgeFunction } from '../../lib/edgeFunctions'
 import BrandSelector from '../brands/BrandSelector'
+import StatusTimeline from './StatusTimeline'
 import Modal from '../ui/Modal'
 import Confirm from '../ui/Confirm'
 import BrandForm from '../brands/BrandForm'
@@ -61,6 +61,7 @@ interface ItemFormValues {
 
 export default function ItemForm({ item, onDone }: ItemFormProps) {
   const { create, update, markShopifyFinished, unbindShopify, pushShopifyDraft, linkShopifyProduct } = useItemMutations()
+  const [tab, setTab] = useState<'details' | 'history'>('details')
   const { data: consignees = [] } = useConsignees()
   const { data: allBrands = [] } = useBrands()
   const [selectedBrands, setSelectedBrands] = useState<Brand[]>([])
@@ -86,8 +87,6 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       ready_to_list: false, scheduled_drop_at: '',
     }
   })
-
-  const savingDots = useAnimatedDots(isSubmitting)
 
   const storeConsignee = consignees.find(c => c.is_default_store) ?? null
   const consigneeOptions = consignees.filter(c => !c.is_default_store)
@@ -138,6 +137,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
     setReassignUrl('')
     setReassignProduct(null)
     setReassignVariantId('')
+    setTab('details')
     // storeConsignee intentionally omitted — re-run only when item changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item, reset])
@@ -158,7 +158,17 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
     }
   }
 
-  const onSubmit = async (data: ItemFormValues) => {
+  // Closes the moment a validated submit fires, rather than waiting on the
+  // save (and any Shopify push) to finish first — the inventory list's own
+  // loading fade already covers that wait, so sitting on the modal for it
+  // too was redundant. The save itself still runs to completion in the
+  // background; a failure at this point (network/DB, not a validation
+  // problem — RHF already blocked those before onSubmit ever ran) is
+  // logged rather than shown, since there's no longer a modal to show it
+  // in. A failed Shopify push still leaves ready_to_list set with no
+  // product linked, so the existing "Push to Shopify now" retry button
+  // surfaces again next time the item's reopened.
+  const onSubmit = (data: ItemFormValues) => {
     const effectiveConsignee = isConsigned
       ? (consignees.find(c => c.id === data.consignee_id) ?? null)
       : storeConsignee
@@ -188,17 +198,21 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
 
     const shouldPushDraft = data.ready_to_list && !item?.shopify_product_id
 
-    if (item) {
-      await update.mutateAsync({ id: item.id, readable_id: item.readable_id, ...payload })
-      if (shouldPushDraft) {
-        const ok = await pushToShopify(item.id)
-        if (!ok) return // keep the form open so the error + retry button are visible
-      }
-    } else {
-      const created = await create.mutateAsync(payload)
-      if (shouldPushDraft) await pushToShopify((created as { id: string }).id)
-    }
     onDone()
+
+    void (async () => {
+      try {
+        if (item) {
+          await update.mutateAsync({ id: item.id, readable_id: item.readable_id, ...payload })
+          if (shouldPushDraft) await pushToShopify(item.id)
+        } else {
+          const created = await create.mutateAsync(payload)
+          if (shouldPushDraft) await pushToShopify((created as { id: string }).id)
+        }
+      } catch (err) {
+        console.error('[ItemForm] save failed', err)
+      }
+    })()
   }
 
   const pushToShopify = async (itemId: string): Promise<boolean> => {
@@ -219,9 +233,14 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
   }
 
   const markFinished = async () => {
-    if (!item) return
-    await markShopifyFinished.mutateAsync(item.id)
-    onDone()
+    if (!item?.shopify_product_id) return
+    setShopifyError(null)
+    try {
+      await markShopifyFinished.mutateAsync({ id: item.id, shopifyProductId: item.shopify_product_id })
+      onDone()
+    } catch (err) {
+      setShopifyError(err instanceof Error ? err.message : 'Failed to publish on Shopify')
+    }
   }
 
   const confirmUnbind = async () => {
@@ -257,21 +276,111 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
     }
   }
 
-  const mutationError = create.error ?? update.error
-
   // ID preview: store-owned always shows UG, consigned shows selected consignee
   const previewConsigneeAbbr = isConsigned
     ? (consignees.find(c => c.id === watchedConsigneeId)?.abbreviation ?? null)
     : (storeConsignee?.abbreviation ?? null)
 
+  // No tabs for a brand-new item — there's no history or sale to show yet,
+  // so it just always renders the Details content below.
+  const showDetails = !item || tab === 'details'
+  const showHistory = !!item && tab === 'history'
+
+  // Shared between the History tab (existing items) and an inline spot in
+  // Details (brand-new items, which have no History tab yet to hold it).
+  const saleDetailsSection = watchedStatus === 'sold' && (
+    <div className="border border-border rounded-lg px-3 py-3 space-y-3 bg-surface-2/40">
+      <div>
+        <p className="text-xs font-medium text-white mb-0.5">Sale Details</p>
+        <p className="text-xs text-gray-600">Actual price and channel — may differ from the listed price above.</p>
+      </div>
+      {item?.shopify_order_id && (
+        <div className="flex items-center justify-between gap-2 text-xs bg-surface-2 border border-border rounded px-2.5 py-1.5">
+          <span className="text-gray-400">Sold via Shopify checkout</span>
+          {item.shopify_order_url && (
+            <a href={item.shopify_order_url} target="_blank" rel="noreferrer" className="text-gray-300 hover:text-white transition-colors shrink-0">
+              View order on Shopify →
+            </a>
+          )}
+        </div>
+      )}
+      <div>
+        <label className="label">Actual Sold Price</label>
+        <input className="input" type="number" step="0.01" {...register('sold_price')} placeholder="0.00" />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="label">Sale Channel</label>
+          <select className="input" {...register('sale_channel')}>
+            <option value="">— unknown —</option>
+            {(Object.entries(SALE_CHANNEL_CONFIG) as [SaleChannel, { label: string }][]).map(([k, v]) => (
+              <option key={k} value={k}>{v.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label">Geography</label>
+          <select className="input" {...register('sale_geography')}>
+            <option value="">— unknown —</option>
+            {(Object.entries(SALE_GEOGRAPHY_CONFIG) as [SaleGeography, { label: string }][]).map(([k, v]) => (
+              <option key={k} value={k}>{v.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="label">Payment Type</label>
+          <select className="input" {...register('payment_type')}>
+            <option value="">— unknown —</option>
+            {(Object.entries(PAYMENT_TYPE_CONFIG) as [PaymentType, { label: string }][]).map(([k, v]) => (
+              <option key={k} value={k}>{v.label}</option>
+            ))}
+          </select>
+        </div>
+        {paymentTypeHasFee(watchedPaymentType) && (
+          <div>
+            <label className="label">Fee</label>
+            <input className="input" type="number" step="0.01" {...register('card_fee')} placeholder="0.00" />
+          </div>
+        )}
+      </div>
+    </div>
+  )
+
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
-      {mutationError && (
-        <div className="text-xs text-red-400 bg-red-900/20 border border-red-900/40 rounded px-3 py-2">
-          {mutationError.message}
+      {item && (
+        <div className="flex gap-4 border-b border-border">
+          <button
+            type="button"
+            onClick={() => setTab('details')}
+            className={`px-1 pb-2 text-sm font-medium border-b-2 transition-colors ${tab === 'details' ? 'border-white text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+          >
+            Details
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('history')}
+            className={`px-1 pb-2 text-sm font-medium border-b-2 transition-colors ${tab === 'history' ? 'border-white text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+          >
+            History
+          </button>
         </div>
       )}
 
+      {showHistory && (
+        <div className="space-y-5">
+          <div>
+            <label className="label mb-1.5">Status History</label>
+            <StatusTimeline itemId={item!.id} />
+          </div>
+          {saleDetailsSection}
+        </div>
+      )}
+
+      {showDetails && (
+      <>
       {/* Name + Size */}
       <div className="grid grid-cols-3 gap-2">
         <div className="col-span-2">
@@ -398,56 +507,10 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
         </div>
       )}
 
-      {/* Sale details — only when status is sold */}
-      {watchedStatus === 'sold' && (
-        <div className="border border-border rounded-lg px-3 py-3 space-y-3 bg-surface-2/40">
-          <div>
-            <p className="text-xs font-medium text-white mb-0.5">Sale Details</p>
-            <p className="text-xs text-gray-600">Actual price and channel — may differ from the listed price above.</p>
-          </div>
-          <div>
-            <label className="label">Actual Sold Price</label>
-            <input className="input" type="number" step="0.01" {...register('sold_price')} placeholder="0.00" />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="label">Sale Channel</label>
-              <select className="input" {...register('sale_channel')}>
-                <option value="">— unknown —</option>
-                {(Object.entries(SALE_CHANNEL_CONFIG) as [SaleChannel, { label: string }][]).map(([k, v]) => (
-                  <option key={k} value={k}>{v.label}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="label">Geography</label>
-              <select className="input" {...register('sale_geography')}>
-                <option value="">— unknown —</option>
-                {(Object.entries(SALE_GEOGRAPHY_CONFIG) as [SaleGeography, { label: string }][]).map(([k, v]) => (
-                  <option key={k} value={k}>{v.label}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="label">Payment Type</label>
-              <select className="input" {...register('payment_type')}>
-                <option value="">— unknown —</option>
-                {(Object.entries(PAYMENT_TYPE_CONFIG) as [PaymentType, { label: string }][]).map(([k, v]) => (
-                  <option key={k} value={k}>{v.label}</option>
-                ))}
-              </select>
-            </div>
-            {paymentTypeHasFee(watchedPaymentType) && (
-              <div>
-                <label className="label">Fee</label>
-                <input className="input" type="number" step="0.01" {...register('card_fee')} placeholder="0.00" />
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Sale details for a brand-new item — shown inline here since a new
+          item has no History tab yet to hold it (see saleDetailsSection,
+          reused in the History tab for existing items). */}
+      {!item && saleDetailsSection}
 
       {/* Shopify listing */}
       <div className="border border-border rounded-lg px-3 py-3 space-y-3 bg-surface-2/40">
@@ -465,8 +528,13 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
                 </a>
               )}
               {item.shopify_needs_finishing && (
-                <button type="button" className="btn-ghost py-1 px-2 text-xs" onClick={() => void markFinished()}>
-                  Mark as finished
+                <button
+                  type="button"
+                  className="btn-ghost py-1 px-2 text-xs"
+                  disabled={markShopifyFinished.isPending}
+                  onClick={() => void markFinished()}
+                >
+                  {markShopifyFinished.isPending ? 'Publishing…' : 'Mark as finished'}
                 </button>
               )}
             </div>
@@ -607,11 +675,13 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
           </span>
         </div>
       )}
+      </>
+      )}
 
       <div className="flex gap-2 justify-end pt-2">
         <button type="button" className="btn-ghost" onClick={onDone}>Cancel</button>
         <button type="submit" className="btn-primary" disabled={isSubmitting}>
-          {isSubmitting ? `Saving${savingDots}` : item ? 'Save Changes' : 'Add Item'}
+          {item ? 'Save Changes' : 'Add Item'}
         </button>
       </div>
 
@@ -626,7 +696,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       <Confirm
         open={unbinding}
         onClose={() => setUnbinding(false)}
-        onConfirm={() => void confirmUnbind()}
+        onConfirm={() => confirmUnbind()}
         title="Unbind Shopify Listing"
         message="This clears the link in UGIS only — the listing itself stays on Shopify untouched. You can relink it later via URL or the bulk match tool."
         danger

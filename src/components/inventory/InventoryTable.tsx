@@ -26,6 +26,7 @@ interface InventoryTableProps {
   sort: SortState
   onSortChange: (updater: SortState | ((prev: SortState) => SortState)) => void
   bulkMode: boolean
+  missingListingIds: Set<string>
 }
 
 // Rounder, larger, neutral-gray checkbox — reads as a deliberate UI
@@ -77,7 +78,7 @@ function SortableHeader({ label, active, dir, onClick }: {
   )
 }
 
-export default function InventoryTable({ items, sort, onSortChange, bulkMode }: InventoryTableProps) {
+export default function InventoryTable({ items, sort, onSortChange, bulkMode, missingListingIds }: InventoryTableProps) {
   const [editing, setEditing] = useState<Item | null>(null)
   const [deleting, setDeleting] = useState<Item | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -243,16 +244,25 @@ export default function InventoryTable({ items, sort, onSortChange, bulkMode }: 
                     />
                   </td>
                 )}
-                <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">
+                <td className={`px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap ${missingListingIds.has(item.id) ? 'line-through opacity-60' : ''}`}>
                   <div className="flex items-center gap-1.5">
-                    <ShopifyStatusDot item={item} pending={pendingShopifyLinkIds.has(item.id)} />
+                    {missingListingIds.has(item.id) ? (
+                      <span className="text-red-400" title="Shopify listing was deleted — see the Actionable tab">✕</span>
+                    ) : (
+                      <ShopifyStatusDot item={item} pending={pendingShopifyLinkIds.has(item.id)} />
+                    )}
                     {isIncomplete(item) && (
                       <span className="text-amber-400" title={`Missing: ${getMissingFields(item).map(f => f.label).join(', ')}`}>⚠</span>
                     )}
                     {item.readable_id}
                   </div>
                 </td>
-                <td className="px-4 py-3 text-white font-medium max-w-xs truncate" title={item.name}>{item.name}</td>
+                <td
+                  className={`px-4 py-3 text-white font-medium max-w-xs truncate ${missingListingIds.has(item.id) ? 'line-through opacity-60' : ''}`}
+                  title={item.name}
+                >
+                  {item.name}
+                </td>
                 <td className="px-4 py-3 text-xs font-mono text-gray-400">{item.size ?? 'N/A'}</td>
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-1">
@@ -329,9 +339,15 @@ export default function InventoryTable({ items, sort, onSortChange, bulkMode }: 
                 />
               )}
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-white truncate leading-tight">{item.name}</p>
+                <p className={`text-sm font-medium text-white truncate leading-tight ${missingListingIds.has(item.id) ? 'line-through opacity-60' : ''}`}>
+                  {item.name}
+                </p>
                 <p className="text-xs font-mono text-gray-500 leading-tight mt-0.5 flex items-center gap-1.5">
-                  <ShopifyStatusDot item={item} pending={pendingShopifyLinkIds.has(item.id)} />
+                  {missingListingIds.has(item.id) ? (
+                    <span className="text-red-400" title="Shopify listing was deleted — see the Actionable tab">✕</span>
+                  ) : (
+                    <ShopifyStatusDot item={item} pending={pendingShopifyLinkIds.has(item.id)} />
+                  )}
                   {isIncomplete(item) && (
                     <span className="text-amber-400" title={`Missing: ${getMissingFields(item).map(f => f.label).join(', ')}`}>⚠</span>
                   )}

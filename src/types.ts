@@ -76,6 +76,7 @@ export interface Item {
   is_migrated: boolean
   shopify_needs_finishing: boolean
   shopify_order_id: string | null
+  shopify_order_url: string | null
 }
 
 export interface ItemSnapshot {
@@ -112,6 +113,13 @@ export interface ItemLog {
   reverted: boolean
 }
 
+export interface ItemStatusHistoryEntry {
+  id: string
+  item_id: string
+  status: ItemStatus
+  changed_at: string
+}
+
 export type ReconciliationRunStatus = 'running' | 'completed' | 'failed'
 
 export interface ReconciliationRun {
@@ -122,12 +130,16 @@ export interface ReconciliationRun {
   items_scanned: number | null
   discrepancies_opened: number | null
   discrepancies_closed: number | null
+  listing_statuses_synced: number | null
   error: string | null
 }
+
+export type ShopifyDiscrepancyKind = 'sold_status' | 'listing_missing'
 
 export interface ShopifyDiscrepancy {
   id: string
   item_id: string
+  kind: ShopifyDiscrepancyKind
   ugis_status: ItemStatus
   shopify_available_quantity: number | null
   detected_at: string

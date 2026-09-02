@@ -84,6 +84,11 @@ export function useTriggerReconciliation() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['reconciliation-run'] })
       qc.invalidateQueries({ queryKey: ['shopify-discrepancies'] })
+      // The run also writes item_logs entries for anything it auto-fixed
+      // (Draft/Live sync, auto-resolved discrepancies) — without this, the
+      // Actionable tab's "Recently Auto-Resolved" feed would only refresh
+      // on the next unrelated item_logs invalidation elsewhere in the app.
+      qc.invalidateQueries({ queryKey: ['item_logs'] })
     },
   })
 }

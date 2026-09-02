@@ -357,15 +357,31 @@ export function useItemMutations() {
     onSuccess: () => {
       invalidate()
       invalidateLogs()
+      // A deleted item's open shopify_discrepancies row cascades away in
+      // the database automatically (on delete cascade), but nothing else
+      // told the frontend's cached discrepancies list to refetch — without
+      // this, a just-deleted item's row sits there stale on the Actionable
+      // tab until something unrelated happens to invalidate it.
+      qc.invalidateQueries({ queryKey: ['shopify-discrepancies'] })
     },
   })
 
+  // Actually publishes the product on Shopify (Draft -> Active) before
+  // clearing shopify_needs_finishing — previously this only flipped the
+  // UGIS-side flag, so clicking "Mark as finished" without separately
+  // publishing in Shopify admin made UGIS show the item as Live while the
+  // real listing was still sitting in Draft. If the Shopify call fails,
+  // the flag stays put and the error surfaces, rather than UGIS silently
+  // lying about the listing's real state.
   const markShopifyFinished = useMutation({
-    mutationFn: async (id: string) => {
+    mutationFn: async ({ id, shopifyProductId }: { id: string; shopifyProductId: string }) => {
+      const { error: publishError } = await invokeEdgeFunction('shopify-publish-product', { productId: shopifyProductId })
+      if (publishError) throw new Error(publishError)
+
       const { error } = await supabase.from('items').update({ shopify_needs_finishing: false }).eq('id', id)
       if (error) throw error
     },
-    onSuccess: (_, id) => {
+    onSuccess: (_, { id }) => {
       invalidate()
       qc.invalidateQueries({ queryKey: ['item', id] })
     },

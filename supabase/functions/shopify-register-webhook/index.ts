@@ -1,17 +1,24 @@
-// One-time setup utility — registers the orders/paid webhook subscription
-// pointing at shopify-webhook-orders-paid. Not part of the app's regular
-// runtime; run once (calling it again is harmless, it checks for an
-// existing matching subscription first and no-ops).
+// One-time setup utility — registers webhook subscriptions pointing at
+// this project's webhook-receiving functions. Not part of the app's
+// regular runtime; run once (calling it again is harmless, it checks for
+// an existing matching subscription per topic first and skips it).
 import { corsPreflight, jsonResponse } from '../_shared/cors.ts'
 import { shopifyGraphql } from '../_shared/shopify.ts'
 
-const CALLBACK_URL = 'https://zuallwsggkzbccqhwrfl.supabase.co/functions/v1/shopify-webhook-orders-paid'
+const PROJECT_BASE = 'https://zuallwsggkzbccqhwrfl.supabase.co/functions/v1'
+
+const SUBSCRIPTIONS: { topic: string; callbackUrl: string }[] = [
+  { topic: 'ORDERS_PAID', callbackUrl: `${PROJECT_BASE}/shopify-webhook-orders-paid` },
+  { topic: 'PRODUCTS_UPDATE', callbackUrl: `${PROJECT_BASE}/shopify-webhook-products-update` },
+  { topic: 'PRODUCTS_DELETE', callbackUrl: `${PROJECT_BASE}/shopify-webhook-products-delete` },
+]
 
 const LIST_SUBSCRIPTIONS = `
-  query existingSubscriptions {
-    webhookSubscriptions(first: 50, topics: [ORDERS_PAID]) {
+  query existingSubscriptions($topics: [WebhookSubscriptionTopic!]) {
+    webhookSubscriptions(first: 50, topics: $topics) {
       nodes {
         id
+        topic
         endpoint {
           __typename
           ... on WebhookHttpEndpoint { callbackUrl }
@@ -32,7 +39,7 @@ const CREATE_SUBSCRIPTION = `
 
 interface ExistingSubscriptionsResult {
   webhookSubscriptions: {
-    nodes: { id: string; endpoint: { __typename: string; callbackUrl?: string } }[]
+    nodes: { id: string; topic: string; endpoint: { __typename: string; callbackUrl?: string } }[]
   }
 }
 
@@ -48,25 +55,36 @@ Deno.serve(async req => {
   if (preflight) return preflight
 
   try {
-    const existing = await shopifyGraphql<ExistingSubscriptionsResult>(LIST_SUBSCRIPTIONS)
-    const alreadyRegistered = existing.webhookSubscriptions.nodes.some(
-      n => n.endpoint.__typename === 'WebhookHttpEndpoint' && n.endpoint.callbackUrl === CALLBACK_URL,
-    )
-    if (alreadyRegistered) {
-      return jsonResponse({ ok: true, alreadyRegistered: true })
-    }
-
-    const created = await shopifyGraphql<CreateSubscriptionResult>(CREATE_SUBSCRIPTION, {
-      topic: 'ORDERS_PAID',
-      webhookSubscription: { callbackUrl: CALLBACK_URL, format: 'JSON' },
+    const existing = await shopifyGraphql<ExistingSubscriptionsResult>(LIST_SUBSCRIPTIONS, {
+      topics: SUBSCRIPTIONS.map(s => s.topic),
     })
 
-    const { webhookSubscription, userErrors } = created.webhookSubscriptionCreate
-    if (userErrors.length > 0 || !webhookSubscription) {
-      return jsonResponse({ error: userErrors.map(e => e.message).join('; ') || 'Subscription creation failed' }, 502)
+    const results: { topic: string; ok: boolean; alreadyRegistered?: boolean; subscriptionId?: string; error?: string }[] = []
+
+    for (const { topic, callbackUrl } of SUBSCRIPTIONS) {
+      const alreadyRegistered = existing.webhookSubscriptions.nodes.some(
+        n => n.topic === topic && n.endpoint.__typename === 'WebhookHttpEndpoint' && n.endpoint.callbackUrl === callbackUrl,
+      )
+      if (alreadyRegistered) {
+        results.push({ topic, ok: true, alreadyRegistered: true })
+        continue
+      }
+
+      const created = await shopifyGraphql<CreateSubscriptionResult>(CREATE_SUBSCRIPTION, {
+        topic,
+        webhookSubscription: { callbackUrl, format: 'JSON' },
+      })
+
+      const { webhookSubscription, userErrors } = created.webhookSubscriptionCreate
+      if (userErrors.length > 0 || !webhookSubscription) {
+        results.push({ topic, ok: false, error: userErrors.map(e => e.message).join('; ') || 'Subscription creation failed' })
+      } else {
+        results.push({ topic, ok: true, subscriptionId: webhookSubscription.id })
+      }
     }
 
-    return jsonResponse({ ok: true, subscriptionId: webhookSubscription.id })
+    const allOk = results.every(r => r.ok)
+    return jsonResponse({ ok: allOk, results }, allOk ? 200 : 502)
   } catch (err) {
     console.error('[shopify-register-webhook]', err)
     return jsonResponse({ error: err instanceof Error ? err.message : 'Unknown error' }, 500)

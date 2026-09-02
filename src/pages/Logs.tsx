@@ -24,6 +24,7 @@ const FIELD_LABELS: Record<string, string> = {
   notes: 'Notes',
   consignee: 'Consignee',
   brands: 'Brands',
+  shopify_needs_finishing: 'Shopify Listing',
 }
 
 function fmtVal(field: string, v: unknown): string {
@@ -34,6 +35,7 @@ function fmtVal(field: string, v: unknown): string {
   }
   if (field === 'sale_channel') return SALE_CHANNEL_CONFIG[v as SaleChannel]?.label ?? String(v)
   if (field === 'sale_geography') return SALE_GEOGRAPHY_CONFIG[v as SaleGeography]?.label ?? String(v)
+  if (field === 'shopify_needs_finishing') return v ? 'Draft' : 'Live'
   return String(v)
 }
 
@@ -73,7 +75,7 @@ export default function Logs() {
   const [reverting, setReverting] = useState<string | null>(null)
 
   const handleRevert = async (log: ItemLog) => {
-    if (!log.item_id || log.reverted || actionType(log) !== 'edit') return
+    if (!log.item_id || log.reverted || actionType(log) !== 'edit' || !log.snapshot_before?.id) return
     setReverting(log.id)
     try {
       const s = log.snapshot_before
@@ -138,7 +140,14 @@ export default function Logs() {
                     type === 'bulk_updated' ? 'border-l-2 border-l-blue-500/50' :
                     type === 'deleted' ? 'border-l-2 border-l-red-500/50' : ''
 
-                  const canRevert = type === 'edit' && !!log.item_id && !log.reverted
+                  // A handful of system-generated entries (Shopify order
+                  // sync, discrepancy resolution, listing-status
+                  // auto-correction) fall into the generic 'edit' bucket
+                  // but carry no real snapshot_before to revert to — guard
+                  // on that directly rather than trying to enumerate every
+                  // such _action value here.
+                  const hasRevertableSnapshot = !!log.snapshot_before?.id
+                  const canRevert = type === 'edit' && !!log.item_id && !log.reverted && hasRevertableSnapshot
 
                   return (
                     <div
@@ -223,6 +232,7 @@ export default function Logs() {
                           type === 'created' || type === 'imported' || type === 'bulk_updated' ? 'Cannot revert a bulk operation' :
                           log.reverted ? 'Already reverted' :
                           !log.item_id ? 'Item no longer exists' :
+                          !hasRevertableSnapshot ? 'Nothing to revert to for this entry' :
                           'Revert item to this state'
                         }
                         className="text-xs text-gray-600 hover:text-white border border-border hover:border-gray-500 rounded px-2.5 py-1 transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0"

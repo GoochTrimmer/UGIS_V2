@@ -1,19 +1,23 @@
 import { useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import Layout from '../components/layout/Layout'
 import Modal from '../components/ui/Modal'
+import Confirm from '../components/ui/Confirm'
 import Spinner from '../components/ui/Spinner'
 import ItemForm from '../components/inventory/ItemForm'
+import { supabase } from '../lib/supabase'
 import { STATUS_CONFIG } from '../lib/constants'
 import { writeItemLog } from '../lib/itemLog'
 import { getMissingFields } from '../lib/itemCompleteness'
 import { useItems, useItemMutations } from '../hooks/useItems'
+import { useItemLogs } from '../hooks/useItemLogs'
 import {
   useLatestReconciliationRun,
   useOpenDiscrepancies,
   useTriggerReconciliation,
   useResolveDiscrepancy,
 } from '../hooks/useReconciliation'
-import type { Item, ItemStatus, ShopifyDiscrepancy } from '../types'
+import type { Item, ItemLog, ItemStatus, ShopifyDiscrepancy } from '../types'
 
 function timeAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime()
@@ -30,6 +34,83 @@ function shopifyStateLabel(qty: number | null): string {
   return qty > 0 ? `Active (qty ${qty})` : 'Sold out'
 }
 
+function ListingMissingRow({ discrepancy }: { discrepancy: ShopifyDiscrepancy }) {
+  const { unbindShopify, remove } = useItemMutations()
+  const resolveDiscrepancy = useResolveDiscrepancy()
+  const [unbinding, setUnbinding] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const unbind = async () => {
+    setUnbinding(true); setError(null)
+    try {
+      await unbindShopify.mutateAsync(discrepancy.item_id)
+      // resolved_status doesn't mean "confirmed status" here the way it
+      // does for a sold_status discrepancy — there's nothing to confirm,
+      // just a record that this one was handled and how.
+      await resolveDiscrepancy.mutateAsync({ id: discrepancy.id, status: discrepancy.ugis_status })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to unbind')
+    } finally {
+      setUnbinding(false)
+    }
+  }
+
+  const deleteItem = async () => {
+    setDeleting(true); setError(null)
+    try {
+      // No need to also resolve the discrepancy row — it cascades away
+      // with the item (shopify_discrepancies.item_id references items
+      // on delete cascade).
+      await remove.mutateAsync(discrepancy.item_id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const busy = unbinding || deleting
+
+  return (
+    <div className="px-4 py-3 border-b border-border last:border-b-0">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <p className="text-sm text-white font-medium">
+            {discrepancy.item?.name ?? 'Unknown item'}
+            <span className="ml-2 text-xs font-mono text-gray-500">{discrepancy.item?.readable_id}</span>
+          </p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            <span className="text-amber-400">Shopify listing no longer exists</span> — likely deleted directly in
+            Shopify admin. UGIS still shows it as linked.
+            {' · '}
+            detected {timeAgo(discrepancy.detected_at)}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button className="btn-ghost py-1 px-2 text-xs text-red-400 hover:text-red-300" disabled={busy} onClick={() => setConfirmingDelete(true)}>
+            Delete Item
+          </button>
+          <button className="btn-primary py-1 px-2 text-xs" disabled={busy} onClick={() => void unbind()}>
+            {unbinding ? 'Unbinding…' : 'Unbind Shopify Link'}
+          </button>
+        </div>
+      </div>
+      {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
+
+      <Confirm
+        open={confirmingDelete}
+        onClose={() => setConfirmingDelete(false)}
+        onConfirm={() => deleteItem()}
+        title="Delete Item"
+        message={`Permanently delete "${discrepancy.item?.name ?? 'this item'}" from UGIS? The Shopify listing is already gone — this only affects UGIS's own record, and cannot be undone.`}
+        danger
+      />
+    </div>
+  )
+}
+
 function DiscrepancyRow({ discrepancy }: { discrepancy: ShopifyDiscrepancy }) {
   const { updateStatus, forceSyncShopifyStatus } = useItemMutations()
   const resolveDiscrepancy = useResolveDiscrepancy()
@@ -37,6 +118,8 @@ function DiscrepancyRow({ discrepancy }: { discrepancy: ShopifyDiscrepancy }) {
   const [chosenStatus, setChosenStatus] = useState<ItemStatus>(currentStatus)
   const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  if (discrepancy.kind === 'listing_missing') return <ListingMissingRow discrepancy={discrepancy} />
 
   const confirm = async () => {
     setConfirming(true); setError(null)
@@ -122,6 +205,116 @@ function IncompleteItemRow({ item, onEdit }: { item: Item; onEdit: (item: Item) 
   )
 }
 
+// Reconciliation writes an item_logs entry for everything it fixes on its
+// own (Draft/Live sync, an auto-closed discrepancy) — this surfaces those
+// directly on Actionable instead of leaving them buried in a run-summary
+// sentence or requiring a trip to the History page to notice.
+const AUTO_ACTIONS = new Set(['listing_status_synced', 'discrepancy_auto_resolved'])
+
+function autoCorrectionDetail(log: ItemLog): string {
+  const action = log.field_changes['_action']?.to
+  if (action === 'listing_status_synced') {
+    const nowNeedsFinishing = log.field_changes['shopify_needs_finishing']?.to
+    return `Shopify listing status corrected: ${nowNeedsFinishing ? 'Live → Draft' : 'Draft → Live'}`
+  }
+  if (action === 'discrepancy_auto_resolved') {
+    return String(log.field_changes['_detail']?.to ?? 'Discrepancy resolved automatically.')
+  }
+  return 'Auto-corrected.'
+}
+
+function AutoResolvedRow({ log, onDeleted }: { log: ItemLog; onDeleted: () => void }) {
+  const [deleting, setDeleting] = useState(false)
+
+  const deleteOne = async () => {
+    setDeleting(true)
+    try {
+      const { error } = await supabase.from('item_logs').delete().eq('id', log.id)
+      if (error) throw error
+      onDeleted()
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <div className="px-4 py-2.5 flex items-start gap-2.5">
+      <span className="text-emerald-400 shrink-0 mt-0.5">✓</span>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs">
+          <span className="text-white font-medium">{log.item_name}</span>
+          <span className="text-gray-600"> — </span>
+          <span className="text-emerald-400">{autoCorrectionDetail(log)}</span>
+        </p>
+        <p className="text-xs text-gray-600 mt-0.5">{timeAgo(log.changed_at)}</p>
+      </div>
+      <button
+        type="button"
+        className="text-gray-600 hover:text-red-400 transition-colors shrink-0 text-xs px-1"
+        disabled={deleting}
+        onClick={() => void deleteOne()}
+        title="Delete this entry"
+      >
+        {deleting ? '…' : '✕'}
+      </button>
+    </div>
+  )
+}
+
+function AutoResolvedSection() {
+  const qc = useQueryClient()
+  const { data: logs = [] } = useItemLogs()
+  const entries = useMemo(
+    () => logs.filter(l => AUTO_ACTIONS.has(String(l.field_changes['_action']?.to))),
+    [logs],
+  )
+  const [clearing, setClearing] = useState(false)
+  const [confirmingClear, setConfirmingClear] = useState(false)
+  const invalidateLogs = () => qc.invalidateQueries({ queryKey: ['item_logs'] })
+
+  const clearAll = async () => {
+    setClearing(true)
+    try {
+      const { error } = await supabase.from('item_logs').delete().in('id', entries.map(e => e.id))
+      if (error) throw error
+      await invalidateLogs()
+    } finally {
+      setClearing(false)
+    }
+  }
+
+  if (entries.length === 0) return null
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <h2 className="text-sm font-medium text-white">Recently Auto-Resolved ({entries.length})</h2>
+        <button className="btn-ghost text-xs shrink-0" disabled={clearing} onClick={() => setConfirmingClear(true)}>
+          Clear
+        </button>
+      </div>
+      <p className="text-xs text-gray-500 mb-3">
+        Fixed automatically by the reconciliation check — no action needed, shown here so it isn't invisible.
+      </p>
+      <div className="card overflow-hidden">
+        <div className="max-h-80 overflow-y-auto divide-y divide-border">
+          {entries.map(log => (
+            <AutoResolvedRow key={log.id} log={log} onDeleted={invalidateLogs} />
+          ))}
+        </div>
+      </div>
+
+      <Confirm
+        open={confirmingClear}
+        onClose={() => setConfirmingClear(false)}
+        onConfirm={() => clearAll()}
+        title="Clear Auto-Resolved Log"
+        message={`Permanently delete ${entries.length} auto-resolved log entr${entries.length === 1 ? 'y' : 'ies'}? This only clears this list — it doesn't undo any of the corrections themselves.`}
+      />
+    </div>
+  )
+}
+
 function IncompleteItemsSection() {
   const { data: items = [], isLoading } = useItems()
   const [editing, setEditing] = useState<Item | null>(null)
@@ -145,7 +338,9 @@ function IncompleteItemsSection() {
             <p className="text-sm">Nothing incomplete — every item has its key fields filled in.</p>
           </div>
         ) : (
-          incompleteItems.map(item => <IncompleteItemRow key={item.id} item={item} onEdit={setEditing} />)
+          <div className="max-h-80 overflow-y-auto">
+            {incompleteItems.map(item => <IncompleteItemRow key={item.id} item={item} onEdit={setEditing} />)}
+          </div>
         )}
       </div>
 
@@ -185,8 +380,11 @@ export default function Actionable() {
             </button>
           </div>
           <p className="text-xs text-gray-500 mb-3">
-            Items where UGIS's status and Shopify's live inventory disagree — usually a failed sync step or a
-            manual edit made directly in Shopify. Confirm which side was right; nothing here resolves itself.
+            Two kinds show up here: UGIS's status disagreeing with Shopify's live inventory (usually a failed sync
+            step or a manual edit made directly in Shopify — confirm which side was right, nothing resolves itself),
+            and a linked Shopify listing that's been deleted entirely (unbind it to clear the stale link). Draft vs.
+            Live listing status is checked too, but that one has a clear right answer, so it's auto-corrected rather
+            than listed below.
           </p>
 
           <div className="text-xs text-gray-600 mb-3">
@@ -199,7 +397,8 @@ export default function Actionable() {
               <span>
                 Last run {timeAgo(latestRun.finished_at ?? latestRun.started_at)} — scanned {latestRun.items_scanned ?? 0} linked
                 item{latestRun.items_scanned === 1 ? '' : 's'}, flagged {latestRun.discrepancies_opened ?? 0}, auto-resolved{' '}
-                {latestRun.discrepancies_closed ?? 0}.
+                {latestRun.discrepancies_closed ?? 0}
+                {!!latestRun.listing_statuses_synced && `, corrected ${latestRun.listing_statuses_synced} Draft/Live status${latestRun.listing_statuses_synced === 1 ? '' : 'es'}`}.
               </span>
             )}
             {!running && latestRun?.status === 'failed' && (
@@ -221,6 +420,8 @@ export default function Actionable() {
             )}
           </div>
         </div>
+
+        <AutoResolvedSection />
 
         <IncompleteItemsSection />
       </div>

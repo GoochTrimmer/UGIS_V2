@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useItems } from '../hooks/useItems'
+import { useOpenDiscrepancies } from '../hooks/useReconciliation'
 import Layout from '../components/layout/Layout'
 import FilterBar from '../components/inventory/FilterBar'
 import InventoryTable from '../components/inventory/InventoryTable'
@@ -50,6 +51,15 @@ export default function Inventory() {
   const { data: items = [], isLoading, isFetching, error } = useItems(filters)
   // Fetch without status filter so tab counts always reflect the full dataset
   const { data: allForCounts = [] } = useItems({ ...filters, status: undefined })
+
+  // Items whose linked Shopify listing has been deleted — struck through in
+  // the table so it's obvious at a glance, with the actual unbind/delete
+  // decision left to the Actionable tab.
+  const { data: discrepancies = [] } = useOpenDiscrepancies()
+  const missingListingIds = useMemo(
+    () => new Set(discrepancies.filter(d => d.kind === 'listing_missing').map(d => d.item_id)),
+    [discrepancies],
+  )
 
   const counts = allForCounts.reduce<Partial<Record<ItemStatus, number>>>((acc, item) => {
     acc[item.status] = (acc[item.status] ?? 0) + 1
@@ -144,7 +154,7 @@ export default function Inventory() {
             <div className="text-sm text-red-400 px-4 py-8 text-center">{(error as Error).message}</div>
           )}
           {!isLoading && !error && (
-            <InventoryTable items={items} sort={sort} onSortChange={setSort} bulkMode={bulkMode} />
+            <InventoryTable items={items} sort={sort} onSortChange={setSort} bulkMode={bulkMode} missingListingIds={missingListingIds} />
           )}
         </div>
       </div>

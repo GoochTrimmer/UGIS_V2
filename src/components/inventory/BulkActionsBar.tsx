@@ -253,7 +253,7 @@ export default function BulkActionsBar({ selectedItems, onClear }: BulkActionsBa
       <Confirm
         open={deleting}
         onClose={() => setDeleting(false)}
-        onConfirm={() => void run(item => deleteItem(item.id), selectedItems)}
+        onConfirm={() => run(item => deleteItem(item.id), selectedItems)}
         title="Delete Items"
         message={
           linkedCount > 0
