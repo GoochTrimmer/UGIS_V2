@@ -6,6 +6,7 @@ import { useBrands } from '../../hooks/useBrands'
 import { invokeEdgeFunction } from '../../lib/edgeFunctions'
 import BrandSelector from '../brands/BrandSelector'
 import StatusTimeline from './StatusTimeline'
+import ItemEditHistory from './ItemEditHistory'
 import Modal from '../ui/Modal'
 import Confirm from '../ui/Confirm'
 import BrandForm from '../brands/BrandForm'
@@ -286,8 +287,6 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
   const showDetails = !item || tab === 'details'
   const showHistory = !!item && tab === 'history'
 
-  // Shared between the History tab (existing items) and an inline spot in
-  // Details (brand-new items, which have no History tab yet to hold it).
   const saleDetailsSection = watchedStatus === 'sold' && (
     <div className="border border-border rounded-lg px-3 py-3 space-y-3 bg-surface-2/40">
       <div>
@@ -375,7 +374,10 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
             <label className="label mb-1.5">Status History</label>
             <StatusTimeline itemId={item!.id} />
           </div>
-          {saleDetailsSection}
+          <div>
+            <label className="label mb-1.5">Other Changes</label>
+            <ItemEditHistory itemId={item!.id} />
+          </div>
         </div>
       )}
 
@@ -507,10 +509,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
         </div>
       )}
 
-      {/* Sale details for a brand-new item — shown inline here since a new
-          item has no History tab yet to hold it (see saleDetailsSection,
-          reused in the History tab for existing items). */}
-      {!item && saleDetailsSection}
+      {saleDetailsSection}
 
       {/* Shopify listing */}
       <div className="border border-border rounded-lg px-3 py-3 space-y-3 bg-surface-2/40">

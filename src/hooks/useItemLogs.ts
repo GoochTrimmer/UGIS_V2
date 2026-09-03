@@ -16,3 +16,20 @@ export function useItemLogs() {
     },
   })
 }
+
+export function useItemLogsForItem(itemId: string | undefined) {
+  return useQuery({
+    queryKey: ['item_logs', 'item', itemId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('item_logs')
+        .select('*')
+        .eq('item_id', itemId as string)
+        .order('changed_at', { ascending: false })
+        .limit(100)
+      if (error) throw error
+      return data as ItemLog[]
+    },
+    enabled: !!itemId,
+  })
+}
