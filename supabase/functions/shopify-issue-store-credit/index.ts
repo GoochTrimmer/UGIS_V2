@@ -24,8 +24,8 @@ interface RequestBody {
 
 const FIND_CUSTOMER = `
   query findCustomer($query: String!) {
-    customers(first: 1, query: $query) {
-      edges { node { id } }
+    customers(first: 5, query: $query) {
+      edges { node { id email phone } }
     }
   }
 `
@@ -33,6 +33,15 @@ const FIND_CUSTOMER = `
 const CREATE_CUSTOMER = `
   mutation createCustomer($input: CustomerInput!) {
     customerCreate(input: $input) {
+      customer { id }
+      userErrors { field message }
+    }
+  }
+`
+
+const UPDATE_CUSTOMER = `
+  mutation updateCustomer($input: CustomerInput!) {
+    customerUpdate(input: $input) {
       customer { id }
       userErrors { field message }
     }
@@ -52,14 +61,52 @@ const ISSUE_CREDIT = `
 `
 
 async function resolveCustomerId(email?: string, phone?: string): Promise<string> {
-  const query = email ? `email:${email}` : `phone:${phone}`
-  const found = await shopifyGraphql<{ customers: { edges: { node: { id: string } }[] } }>(FIND_CUSTOMER, { query })
-  const existingId = found.customers.edges[0]?.node.id
-  if (existingId) return existingId
+  // Search by whichever of email/phone were given, OR'd together — not just
+  // whichever came first. A customer's existing Shopify account may only
+  // have one of the two on file (e.g. they signed up with just an email),
+  // so searching only by the other contact method staff happen to type in
+  // this time would miss them and silently spin up a duplicate account,
+  // splitting their store credit across two customer records.
+  const clauses = [email && `email:${email}`, phone && `phone:${phone}`].filter(Boolean)
+  const found = await shopifyGraphql<{
+    customers: { edges: { node: { id: string; email: string | null; phone: string | null } }[] }
+  }>(FIND_CUSTOMER, { query: clauses.join(' OR ') })
 
+  // With both email and phone given, an OR search can turn up a handful of
+  // loosely-related matches (e.g. two different people who each match on
+  // only one field) — prefer whichever candidate actually matches on both,
+  // so a coincidental single-field match doesn't get picked over the
+  // customer's real account.
+  const candidates = found.customers.edges.map(e => e.node)
+  const bothMatch = candidates.find(c => email && c.email === email && phone && c.phone === phone)
+  const existing = bothMatch ?? candidates[0]
+  if (existing) {
+    // Backfill whichever contact field the matched account is missing (the
+    // frontend lookup form lets staff add it right there) — otherwise a
+    // future search by that field alone would still miss this customer and
+    // spin up a duplicate, the exact problem the OR search above exists to
+    // avoid.
+    const backfill: Record<string, string> = {}
+    if (email && !existing.email) backfill.email = email
+    if (phone && !existing.phone) backfill.phone = phone
+    if (Object.keys(backfill).length > 0) {
+      const updated = await shopifyGraphql<{
+        customerUpdate: { customer: { id: string } | null; userErrors: { field: string[]; message: string }[] }
+      }>(UPDATE_CUSTOMER, { input: { id: existing.id, ...backfill } })
+      const updateErrors = updated.customerUpdate.userErrors
+      if (updateErrors.length > 0) {
+        console.error('[shopify-issue-store-credit] matched customer but failed to backfill contact info', existing.id, updateErrors)
+      }
+    }
+    return existing.id
+  }
+
+  // Record both contact methods on the new account when both were given —
+  // otherwise a future lookup by the dropped one would miss this same
+  // customer and create yet another duplicate.
   const created = await shopifyGraphql<{
     customerCreate: { customer: { id: string } | null; userErrors: { field: string[]; message: string }[] }
-  }>(CREATE_CUSTOMER, { input: email ? { email } : { phone } })
+  }>(CREATE_CUSTOMER, { input: { ...(email ? { email } : {}), ...(phone ? { phone } : {}) } })
 
   const { customer, userErrors } = created.customerCreate
   if (userErrors.length > 0 || !customer) {
@@ -87,13 +134,16 @@ Deno.serve(async req => {
     if (item.trade_in_choice !== 'credit') {
       return jsonResponse({ error: 'This item is not marked as a credit trade-in' }, 400)
     }
-    if (!item.trade_in_credit_offer || item.trade_in_credit_offer <= 0) {
-      return jsonResponse({ error: 'No credit offer amount set on this item' }, 400)
-    }
     if (item.shopify_store_credit_txn_id) {
       return jsonResponse({ error: 'Store credit has already been issued for this item' }, 400)
     }
 
+    // Resolving (and backfilling) the Shopify customer runs before the
+    // credit-amount check below, deliberately — staff may be confirming/
+    // linking a customer's contact info before the offer amount is
+    // finalized (or while testing with $0), and that link/backfill
+    // shouldn't get silently skipped just because there's nothing to
+    // credit yet.
     let shopifyCustomerId = item.shopify_customer_id as string | null
     if (!shopifyCustomerId) {
       if (!customerEmail && !customerPhone) {
@@ -108,6 +158,10 @@ Deno.serve(async req => {
         shopify_customer_id: shopifyCustomerId,
         shopify_customer_admin_url: adminUrl,
       }).eq('id', itemId)
+    }
+
+    if (!item.trade_in_credit_offer || item.trade_in_credit_offer <= 0) {
+      return jsonResponse({ error: 'No credit offer amount set on this item — customer was linked, but no credit was issued.' }, 400)
     }
 
     const currencyCode = await getShopCurrencyCode()

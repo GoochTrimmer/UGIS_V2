@@ -21,6 +21,8 @@ import {
   useOpenStoreCreditDiscrepancies,
   useResolveStoreCreditDiscrepancy,
   useStoreCreditLiability,
+  useShopifyCustomers,
+  type ShopifyCustomerInfo,
 } from '../hooks/useStoreCredit'
 import type { Item, ItemLog, ItemStatus, ShopifyDiscrepancy, StoreCreditDiscrepancy } from '../types'
 
@@ -193,7 +195,11 @@ function DiscrepancyRow({ discrepancy }: { discrepancy: ShopifyDiscrepancy }) {
   )
 }
 
-function StoreCreditDiscrepancyRow({ discrepancy }: { discrepancy: StoreCreditDiscrepancy }) {
+function StoreCreditDiscrepancyRow({ discrepancy, customer, customerLookupFailed }: {
+  discrepancy: StoreCreditDiscrepancy
+  customer: ShopifyCustomerInfo | undefined
+  customerLookupFailed: boolean
+}) {
   const resolve = useResolveStoreCreditDiscrepancy()
   const [resolving, setResolving] = useState(false)
 
@@ -210,13 +216,36 @@ function StoreCreditDiscrepancyRow({ discrepancy }: { discrepancy: StoreCreditDi
     <div className="px-4 py-3 border-b border-border last:border-b-0">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <p className="text-sm text-white font-medium font-mono">{discrepancy.shopify_customer_id}</p>
+          {customer ? (
+            <>
+              <p className="text-sm text-white font-medium">
+                {customer.displayName}
+                {customer.email && <span className="ml-2 text-xs font-normal text-gray-500">{customer.email}</span>}
+              </p>
+              <p className="text-xs font-mono text-gray-600 mt-0.5">{discrepancy.shopify_customer_id}</p>
+            </>
+          ) : (
+            <p className="text-sm text-white font-medium font-mono">
+              {discrepancy.shopify_customer_id}
+              {customerLookupFailed && (
+                <span className="ml-2 text-xs font-sans font-normal text-gray-600">(couldn't reach Shopify for name/email)</span>
+              )}
+            </p>
+          )}
           <p className="text-xs text-gray-500 mt-0.5">
             UGIS ledger: <span className="text-gray-300">${discrepancy.ugis_balance.toFixed(2)}</span>
             {' · '}
             Shopify balance: <span className="text-gray-300">${discrepancy.shopify_balance.toFixed(2)}</span>
             {' · '}
             detected {timeAgo(discrepancy.detected_at)}
+            {customer && (
+              <>
+                {' · '}
+                <a href={customer.adminUrl} target="_blank" rel="noreferrer" className="text-gray-300 hover:text-white transition-colors">
+                  View on Shopify →
+                </a>
+              </>
+            )}
           </p>
         </div>
         <button className="btn-ghost py-1 px-2 text-xs shrink-0" disabled={resolving} onClick={() => void markReviewed()}>
@@ -230,6 +259,8 @@ function StoreCreditDiscrepancyRow({ discrepancy }: { discrepancy: StoreCreditDi
 function StoreCreditSection() {
   const { data: discrepancies = [], isLoading } = useOpenStoreCreditDiscrepancies()
   const { data: liability } = useStoreCreditLiability()
+  const customerIds = useMemo(() => discrepancies.map(d => d.shopify_customer_id), [discrepancies])
+  const { data: customersById, isError: customerLookupFailed } = useShopifyCustomers(customerIds)
 
   return (
     <div>
@@ -249,7 +280,14 @@ function StoreCreditSection() {
             <p className="text-sm">No balance drift — UGIS and Shopify agree.</p>
           </div>
         ) : (
-          discrepancies.map(d => <StoreCreditDiscrepancyRow key={d.id} discrepancy={d} />)
+          discrepancies.map(d => (
+            <StoreCreditDiscrepancyRow
+              key={d.id}
+              discrepancy={d}
+              customer={customersById?.get(d.shopify_customer_id)}
+              customerLookupFailed={!!customerLookupFailed}
+            />
+          ))
         )}
       </div>
     </div>

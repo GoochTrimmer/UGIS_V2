@@ -3,8 +3,9 @@ import { useForm } from 'react-hook-form'
 import { useItemMutations } from '../../hooks/useItems'
 import { useConsignees } from '../../hooks/useConsignees'
 import { useBrands } from '../../hooks/useBrands'
-import { useIssueStoreCredit } from '../../hooks/useStoreCredit'
+import { useIssueStoreCredit, useLookupShopifyCustomer, useAdjustStoreCredit, useShopifyCustomers } from '../../hooks/useStoreCredit'
 import { invokeEdgeFunction } from '../../lib/edgeFunctions'
+import { isValidSgLocalPhone, toE164, fromE164 } from '../../lib/phone'
 import BrandSelector from '../brands/BrandSelector'
 import StatusTimeline from './StatusTimeline'
 import ItemEditHistory from './ItemEditHistory'
@@ -66,18 +67,308 @@ interface ItemFormValues {
   trade_in_choice: 'cash' | 'credit' | ''
 }
 
+// Store-credit issuance/adjustment lives here on the History tab rather
+// than the Details tab — this is a deliberate operational action (tracking
+// UGIS's actual cost and syncing the customer's real Shopify balance), not
+// something that should happen implicitly as a side effect of editing the
+// offer amount and hitting Save. Two distinct actions, never conflated:
+// issuing (first time only) and adjusting (an already-issued amount).
+function TradeInCreditManager({ item }: { item: Item }) {
+  const customerIds = item.shopify_customer_id ? [item.shopify_customer_id] : []
+  const { data: customersById, isLoading, isError } = useShopifyCustomers(customerIds)
+  const customer = item.shopify_customer_id ? customersById?.get(item.shopify_customer_id) : undefined
+
+  const issueStoreCredit = useIssueStoreCredit()
+  const lookupCustomer = useLookupShopifyCustomer()
+  const adjustStoreCredit = useAdjustStoreCredit()
+
+  const [creditEmail, setCreditEmail] = useState('')
+  const [creditPhone, setCreditPhone] = useState('')
+  const [creditError, setCreditError] = useState<string | null>(null)
+  const [lookupMessage, setLookupMessage] = useState<string | null>(null)
+  // Locked once a lookup confirms a field against an actual Shopify
+  // customer record — disables the input so a confirmed value can't be
+  // fat-fingered into a mismatch afterwards. "Change" unlocks it again.
+  const [emailLocked, setEmailLocked] = useState(false)
+  const [phoneLocked, setPhoneLocked] = useState(false)
+
+  const [adjustAmount, setAdjustAmount] = useState(String(item.trade_in_credit_offer ?? 0))
+  const [adjustMessage, setAdjustMessage] = useState<string | null>(null)
+  const [adjustError, setAdjustError] = useState<string | null>(null)
+  // `item` is a snapshot passed in when the modal opened, not a live
+  // subscription (same caveat as markFinished/retryShopifyPush below) — so
+  // a successful adjustment overrides the displayed amount locally rather
+  // than waiting on a prop refresh that won't arrive until the modal's
+  // reopened, even though the query cache itself is invalidated correctly.
+  const [displayAmount, setDisplayAmount] = useState(item.trade_in_credit_offer ?? 0)
+
+  // Keeps both fields in sync if the offer changes underneath them (e.g.
+  // the modal was reopened with fresher data) rather than holding on to
+  // whatever was there at mount.
+  useEffect(() => {
+    setAdjustAmount(String(item.trade_in_credit_offer ?? 0))
+    setDisplayAmount(item.trade_in_credit_offer ?? 0)
+  }, [item.trade_in_credit_offer])
+
+  const emailValid = EMAIL_RE.test(creditEmail.trim())
+  const phoneValid = isValidSgLocalPhone(creditPhone.trim())
+
+  const runCustomerLookup = async () => {
+    setCreditError(null)
+    setLookupMessage(null)
+    if (!emailValid && !phoneValid) return
+
+    try {
+      const result = await lookupCustomer.mutateAsync({
+        email: emailValid ? creditEmail.trim() : undefined,
+        phone: phoneValid ? toE164(creditPhone.trim()) : undefined,
+      })
+      if (!result) {
+        setLookupMessage('No matching customer found on Shopify — enter both fields manually.')
+        return
+      }
+
+      // Shopify's record is the source of truth once matched — adopt it
+      // over whatever was typed (it may have been a typo that's exactly why
+      // the OR search still found them) and lock the field so it can't be
+      // edited into a mismatch afterwards. A field Shopify doesn't have on
+      // file is left as-is — whatever staff enter there gets attached to
+      // this customer's profile when credit is issued.
+      if (result.email) {
+        setCreditEmail(result.email)
+        setEmailLocked(true)
+      }
+      if (result.phone) {
+        setCreditPhone(fromE164(result.phone))
+        setPhoneLocked(true)
+      }
+
+      const missingEmail = !result.email
+      const missingPhone = !result.phone
+      setLookupMessage(
+        missingEmail || missingPhone
+          ? `Found ${result.displayName} on Shopify, but their profile has no ${missingEmail ? 'email' : 'phone number'} linked yet — enter it below and it'll be added to their profile when credit is issued.`
+          : `Found ${result.displayName} on Shopify — both fields confirmed.`,
+      )
+    } catch (err) {
+      setLookupMessage(err instanceof Error ? err.message : 'Lookup failed.')
+    }
+  }
+
+  const runIssue = async () => {
+    setCreditError(null)
+    try {
+      await issueStoreCredit.mutateAsync({
+        itemId: item.id,
+        customerEmail: creditEmail.trim() || undefined,
+        customerPhone: toE164(creditPhone.trim()) || undefined,
+      })
+    } catch (err) {
+      setCreditError(err instanceof Error ? err.message : 'Failed to issue store credit')
+    }
+  }
+
+  const runAdjust = async () => {
+    setAdjustError(null)
+    setAdjustMessage(null)
+    const newAmount = parseFloat(adjustAmount)
+    if (!Number.isFinite(newAmount) || newAmount < 0) {
+      setAdjustError('Enter a valid amount.')
+      return
+    }
+    if (newAmount === displayAmount) {
+      setAdjustError('That\'s already the current amount.')
+      return
+    }
+    try {
+      const result = await adjustStoreCredit.mutateAsync({ itemId: item.id, newAmount })
+      const delta = Math.abs(newAmount - displayAmount).toFixed(2)
+      setAdjustMessage(
+        result?.direction
+          ? `${result.direction === 'credit' ? 'Credited an additional' : 'Debited'} $${delta} on Shopify — new amount $${newAmount.toFixed(2)}.`
+          : 'No change needed.',
+      )
+      setDisplayAmount(newAmount)
+    } catch (err) {
+      setAdjustError(err instanceof Error ? err.message : 'Failed to adjust store credit')
+    }
+  }
+
+  return (
+    <div>
+      <label className="label mb-1.5">Store Credit</label>
+      <div className="card px-3 py-3 space-y-3 text-sm">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-gray-500">Amount</span>
+            <span className="text-white font-medium">${displayAmount.toFixed(2)}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-gray-500">Status</span>
+            {item.shopify_store_credit_txn_id ? (
+              <span className="text-emerald-400">✓ Issued</span>
+            ) : (
+              <span className="text-amber-400">Not yet issued</span>
+            )}
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-gray-500 shrink-0">Customer</span>
+            {!item.shopify_customer_id ? (
+              <span className="text-gray-500">Not yet linked</span>
+            ) : isLoading ? (
+              <span className="text-gray-600">Looking up…</span>
+            ) : customer ? (
+              <span className="text-white text-right">
+                {customer.displayName}
+                {customer.email && <span className="block text-xs text-gray-500">{customer.email}</span>}
+              </span>
+            ) : (
+              <span className="text-gray-500 text-xs font-mono truncate">
+                {isError ? "Couldn't reach Shopify" : item.shopify_customer_id}
+              </span>
+            )}
+          </div>
+          {item.shopify_customer_admin_url && (
+            <div className="flex justify-end">
+              <a href={item.shopify_customer_admin_url} target="_blank" rel="noreferrer" className="text-xs text-gray-300 hover:text-white transition-colors">
+                View customer on Shopify →
+              </a>
+            </div>
+          )}
+        </div>
+
+        {item.shopify_store_credit_txn_id ? (
+          <div className="pt-3 border-t border-border space-y-2">
+            <p className="text-xs text-gray-600">
+              Already issued. Adjusting the amount below credits or debits the difference directly on the
+              customer's Shopify store credit balance and updates this item's cost — use this only to correct
+              the trade-in's value, not as a general way to issue credit.
+            </p>
+            <div className="flex items-center gap-2">
+              <input
+                className="input text-xs"
+                type="number"
+                step="0.01"
+                min="0"
+                value={adjustAmount}
+                onChange={e => { setAdjustAmount(e.target.value); setAdjustError(null); setAdjustMessage(null) }}
+              />
+              <button
+                type="button"
+                className="btn-primary text-xs shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                disabled={adjustStoreCredit.isPending}
+                onClick={() => void runAdjust()}
+              >
+                {adjustStoreCredit.isPending ? 'Updating…' : 'Update Amount'}
+              </button>
+            </div>
+            {adjustMessage && (
+              <p className="text-xs text-emerald-400 bg-emerald-900/20 border border-emerald-900/40 rounded px-2 py-1.5">{adjustMessage}</p>
+            )}
+            {adjustError && (
+              <p className="text-xs text-red-400 bg-red-900/20 border border-red-900/40 rounded px-2 py-1.5">{adjustError}</p>
+            )}
+          </div>
+        ) : !item.trade_in_credit_offer ? (
+          <p className="pt-3 border-t border-border text-xs text-gray-600">
+            Set a credit offer amount on the Details tab, then come back here to issue it.
+          </p>
+        ) : (
+          <div className="pt-3 border-t border-border space-y-2">
+            <p className="text-xs text-gray-600">
+              Store credit attaches to a Shopify customer account — both an email and phone number are
+              required. Fill in one and hit Look Up to check for an existing Shopify customer and autofill
+              the other.
+            </p>
+            <div className="grid grid-cols-2 gap-2 items-start">
+              <div>
+                <input
+                  className="input text-xs disabled:opacity-60 disabled:cursor-not-allowed"
+                  type="email"
+                  placeholder="Customer email *"
+                  value={creditEmail}
+                  disabled={emailLocked}
+                  onChange={e => { setCreditEmail(e.target.value); setCreditError(null); setLookupMessage(null) }}
+                />
+                {emailLocked && (
+                  <button
+                    type="button"
+                    className="text-[10px] text-gray-500 hover:text-white transition-colors mt-1"
+                    onClick={() => setEmailLocked(false)}
+                  >
+                    ✓ Confirmed via Shopify · change
+                  </button>
+                )}
+              </div>
+              <div>
+                <div className="flex items-stretch">
+                  <span className="shrink-0 flex items-center px-2 text-xs text-gray-500 bg-surface-2 border border-border border-r-0 rounded-l">
+                    +65
+                  </span>
+                  <input
+                    className="input text-xs rounded-l-none disabled:opacity-60 disabled:cursor-not-allowed"
+                    type="tel"
+                    inputMode="numeric"
+                    placeholder="Phone *"
+                    value={creditPhone}
+                    disabled={phoneLocked}
+                    onChange={e => { setCreditPhone(e.target.value.replace(/\D/g, '').slice(0, 8)); setCreditError(null); setLookupMessage(null) }}
+                  />
+                </div>
+                {phoneLocked && (
+                  <button
+                    type="button"
+                    className="text-[10px] text-gray-500 hover:text-white transition-colors mt-1"
+                    onClick={() => setPhoneLocked(false)}
+                  >
+                    ✓ Confirmed via Shopify · change
+                  </button>
+                )}
+              </div>
+            </div>
+            {!(emailLocked && phoneLocked) && (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  className="btn-ghost text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+                  disabled={lookupCustomer.isPending || (!emailValid && !phoneValid)}
+                  onClick={() => void runCustomerLookup()}
+                >
+                  {lookupCustomer.isPending ? 'Looking up…' : 'Look Up on Shopify'}
+                </button>
+              </div>
+            )}
+            {lookupMessage && (
+              <p className="text-xs text-gray-400 bg-surface-2 border border-border rounded px-2 py-1.5">{lookupMessage}</p>
+            )}
+            <div className="flex justify-end">
+              <button
+                type="button"
+                className="btn-primary text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+                disabled={issueStoreCredit.isPending || !emailValid || !phoneValid}
+                onClick={() => void runIssue()}
+              >
+                {issueStoreCredit.isPending ? 'Issuing…' : 'Issue Store Credit'}
+              </button>
+            </div>
+            {creditError && (
+              <p className="text-xs text-red-400 bg-red-900/20 border border-red-900/40 rounded px-2 py-1.5">{creditError}</p>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function ItemForm({ item, onDone }: ItemFormProps) {
   const { create, update, markShopifyFinished, unbindShopify, pushShopifyDraft, linkShopifyProduct } = useItemMutations()
-  const issueStoreCredit = useIssueStoreCredit()
   const [tab, setTab] = useState<'details' | 'history'>('details')
   const { data: consignees = [] } = useConsignees()
   const { data: allBrands = [] } = useBrands()
   const [selectedBrands, setSelectedBrands] = useState<Brand[]>([])
   const [isConsigned, setIsConsigned] = useState(false)
   const [isTradeIn, setIsTradeIn] = useState(false)
-  const [creditEmail, setCreditEmail] = useState('')
-  const [creditPhone, setCreditPhone] = useState('')
-  const [creditError, setCreditError] = useState<string | null>(null)
   const [showNewBrand, setShowNewBrand] = useState(false)
   const [showNewConsignee, setShowNewConsignee] = useState(false)
   const [shopifyError, setShopifyError] = useState<string | null>(null)
@@ -111,6 +402,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
   const watchedTradeInChoice = watch('trade_in_choice')
   const watchedTradeInCashOffer = watch('trade_in_cash_offer')
   const watchedTradeInCreditOffer = watch('trade_in_credit_offer')
+  const watchedReadyToList = watch('ready_to_list')
   const sizeReg = register('size')
   const tradeInChoiceField = register('trade_in_choice')
 
@@ -139,8 +431,11 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
         notes: item.notes ?? '',
         ready_to_list: item.ready_to_list,
         scheduled_drop_at: isoToDatetimeLocal(item.scheduled_drop_at),
-        trade_in_cash_offer: item.trade_in_cash_offer ? String(item.trade_in_cash_offer) : '',
-        trade_in_credit_offer: item.trade_in_credit_offer ? String(item.trade_in_credit_offer) : '',
+        // != null (not the usual truthy check) — a genuine $0 offer must
+        // still show as "0", not fall back to '' and silently disable the
+        // Issue Store Credit button (which checks the watched value below).
+        trade_in_cash_offer: item.trade_in_cash_offer != null ? String(item.trade_in_cash_offer) : '',
+        trade_in_credit_offer: item.trade_in_credit_offer != null ? String(item.trade_in_credit_offer) : '',
         trade_in_choice: item.trade_in_choice ?? '',
       })
       setSelectedBrands(item.brands ?? [])
@@ -161,9 +456,6 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
     setReassignUrl('')
     setReassignProduct(null)
     setReassignVariantId('')
-    setCreditEmail('')
-    setCreditPhone('')
-    setCreditError(null)
     setTab('details')
     // storeConsignee intentionally omitted — re-run only when item changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -222,17 +514,6 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
     const tradeInChoice = isTradeIn && data.trade_in_choice ? data.trade_in_choice : null
     const tradeInCost = tradeInChoice === 'cash' ? tradeInCashOffer : tradeInChoice === 'credit' ? tradeInCreditOffer : null
 
-    // New items have no id yet to attach store credit to, so it can't be
-    // issued until after creation (below) — but a bad email is worth
-    // catching now rather than after the item's already been saved.
-    if (!item && tradeInChoice === 'credit') {
-      const email = creditEmail.trim()
-      if (email && !EMAIL_RE.test(email)) {
-        setCreditError('That email address doesn\'t look valid.')
-        return
-      }
-    }
-
     const payload = {
       name: data.name.trim(),
       size: data.size.trim() || null,
@@ -265,25 +546,15 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
 
     void (async () => {
       try {
+        let targetId: string
         if (item) {
           await update.mutateAsync({ id: item.id, readable_id: item.readable_id, ...payload })
-          if (shouldPushDraft) await pushToShopify(item.id)
+          targetId = item.id
         } else {
           const created = await create.mutateAsync(payload)
-          const createdId = (created as { id: string }).id
-          if (shouldPushDraft) await pushToShopify(createdId)
-          if (tradeInChoice === 'credit' && (creditEmail.trim() || creditPhone.trim())) {
-            try {
-              await issueStoreCredit.mutateAsync({
-                itemId: createdId,
-                customerEmail: creditEmail.trim() || undefined,
-                customerPhone: creditPhone.trim() || undefined,
-              })
-            } catch (err) {
-              console.error('[ItemForm] store credit issue failed', err)
-            }
-          }
+          targetId = (created as { id: string }).id
         }
+        if (shouldPushDraft) await pushToShopify(targetId)
       } catch (err) {
         console.error('[ItemForm] save failed', err)
       }
@@ -315,40 +586,6 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       onDone()
     } catch (err) {
       setShopifyError(err instanceof Error ? err.message : 'Failed to publish on Shopify')
-    }
-  }
-
-  const issueCredit = async () => {
-    if (!item) return
-    setCreditError(null)
-
-    if (!item.shopify_customer_id) {
-      const email = creditEmail.trim()
-      const phone = creditPhone.trim()
-      if (!email && !phone) {
-        setCreditError('Enter a customer email or phone number to issue store credit.')
-        return
-      }
-      if (email && !EMAIL_RE.test(email)) {
-        setCreditError('That email address doesn\'t look valid.')
-        return
-      }
-    }
-
-    try {
-      await issueStoreCredit.mutateAsync({
-        itemId: item.id,
-        customerEmail: creditEmail.trim() || undefined,
-        customerPhone: creditPhone.trim() || undefined,
-      })
-      // Closes rather than staying open to reflect the new txn id in
-      // place — same pattern as markFinished/retryShopifyPush below: the
-      // `item` prop here is a snapshot passed in when the modal opened, not
-      // a live subscription, so it wouldn't pick up the change on its own
-      // until reopened anyway.
-      onDone()
-    } catch (err) {
-      setCreditError(err instanceof Error ? err.message : 'Failed to issue store credit')
     }
   }
 
@@ -389,6 +626,16 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
   const previewConsigneeAbbr = isConsigned
     ? (consignees.find(c => c.id === watchedConsigneeId)?.abbreviation ?? null)
     : (storeConsignee?.abbreviation ?? null)
+
+  // Button label reflects every side-effect this save will trigger, not
+  // just "save the item" — a Shopify draft push otherwise happens silently
+  // in the background, and staff should see that coming before they click.
+  // Trade-in credit itself is issued/adjusted only from the History tab
+  // now, deliberately — never as a side effect of a Details-tab save.
+  const willPushToShopify = watchedReadyToList && !item?.shopify_product_id
+  const submitLabel = !willPushToShopify
+    ? (item ? 'Save Changes' : 'Add Item')
+    : `${item ? 'Save' : 'Add'} & Publish to Shopify`
 
   // No tabs for a brand-new item — there's no history or sale to show yet,
   // so it just always renders the Details content below.
@@ -486,6 +733,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
 
       {showHistory && (
         <div className="space-y-5">
+          {item!.trade_in_choice === 'credit' && <TradeInCreditManager item={item!} />}
           <div>
             <label className="label mb-1.5">Status History</label>
             <StatusTimeline itemId={item!.id} />
@@ -603,7 +851,8 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
           <div>
             <label className="label">Customer Chose</label>
             <select
-              className="input"
+              className="input disabled:opacity-60 disabled:cursor-not-allowed"
+              disabled={!!item?.shopify_store_credit_txn_id}
               {...tradeInChoiceField}
               onChange={e => {
                 void tradeInChoiceField.onChange(e)
@@ -629,7 +878,14 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
           {watchedTradeInChoice === 'credit' && (
             <div>
               <label className="label">Credit Offer</label>
-              <input className="input" type="number" step="0.01" {...register('trade_in_credit_offer')} placeholder="0.00" />
+              <input
+                className="input disabled:opacity-60 disabled:cursor-not-allowed"
+                type="number"
+                step="0.01"
+                disabled={!!item?.shopify_store_credit_txn_id}
+                {...register('trade_in_credit_offer')}
+                placeholder="0.00"
+              />
             </div>
           )}
 
@@ -637,60 +893,11 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
             <p className="text-xs text-gray-600">Select cash or store credit to enter the offer amount.</p>
           )}
 
-          {watchedTradeInChoice === 'credit' && (
-            <div className="border-t border-border pt-3 space-y-2">
-              {item?.shopify_store_credit_txn_id ? (
-                <div className="flex items-center justify-between gap-2 text-xs bg-surface-2 border border-border rounded px-2.5 py-1.5">
-                  <span className="text-emerald-400">✓ ${item.trade_in_credit_offer?.toFixed(2)} store credit issued</span>
-                  {item.shopify_customer_admin_url && (
-                    <a href={item.shopify_customer_admin_url} target="_blank" rel="noreferrer" className="text-gray-300 hover:text-white transition-colors shrink-0">
-                      View customer on Shopify →
-                    </a>
-                  )}
-                </div>
-              ) : (
-                <>
-                  <p className="text-xs text-gray-600">
-                    Store credit attaches to a Shopify customer account — needs an email or phone to look up or create one.
-                    {!item && ' Issued automatically once this item is saved.'}
-                  </p>
-                  {!item?.shopify_customer_id && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <input
-                        className="input text-xs"
-                        type="email"
-                        placeholder="Customer email"
-                        value={creditEmail}
-                        onChange={e => { setCreditEmail(e.target.value); setCreditError(null) }}
-                      />
-                      <input
-                        className="input text-xs"
-                        type="tel"
-                        inputMode="numeric"
-                        placeholder="Or phone"
-                        value={creditPhone}
-                        onChange={e => { setCreditPhone(e.target.value.replace(/\D/g, '')); setCreditError(null) }}
-                      />
-                    </div>
-                  )}
-                  {item && (
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        className="btn-primary text-xs"
-                        disabled={issueStoreCredit.isPending || !watchedTradeInCreditOffer}
-                        onClick={() => void issueCredit()}
-                      >
-                        {issueStoreCredit.isPending ? 'Issuing…' : 'Issue Store Credit'}
-                      </button>
-                    </div>
-                  )}
-                  {creditError && (
-                    <p className="text-xs text-red-400 bg-red-900/20 border border-red-900/40 rounded px-2 py-1.5">{creditError}</p>
-                  )}
-                </>
-              )}
-            </div>
+          {watchedTradeInChoice === 'credit' && item?.shopify_store_credit_txn_id && (
+            <p className="text-xs text-gray-600">
+              Already issued — adjust the amount from the History tab rather than editing it here, so the
+              customer's actual Shopify balance stays in sync with this record.
+            </p>
           )}
         </div>
       )}
@@ -925,7 +1132,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       <div className="flex gap-2 justify-end pt-2">
         <button type="button" className="btn-ghost" onClick={onDone}>Cancel</button>
         <button type="submit" className="btn-primary" disabled={isSubmitting}>
-          {item ? 'Save Changes' : 'Add Item'}
+          {submitLabel}
         </button>
       </div>
 
