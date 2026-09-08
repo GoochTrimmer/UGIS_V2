@@ -104,6 +104,9 @@ interface CreateItemInput {
   payment_type: PaymentType | null
   card_fee: number | null
   notes: string | null
+  trade_in_cash_offer: number | null
+  trade_in_credit_offer: number | null
+  trade_in_choice: 'cash' | 'credit' | null
   // Optional — omitted entirely (not just `undefined`) by callers like the
   // Logs revert flow that don't want to touch Shopify link state.
   ready_to_list?: boolean
@@ -275,6 +278,9 @@ export function useItemMutations() {
         notes: item.notes,
         readable_id: readableId,
         consignee_id: item.consignee_id,
+        trade_in_cash_offer: item.trade_in_cash_offer,
+        trade_in_credit_offer: item.trade_in_credit_offer,
+        trade_in_choice: item.trade_in_choice,
         brands: brands.map(b => ({ id: b.id, name: b.name, abbreviation: b.abbreviation })),
         consignee: consignee ? { id: consignee.id, name: consignee.name, abbreviation: consignee.abbreviation } : null,
       }

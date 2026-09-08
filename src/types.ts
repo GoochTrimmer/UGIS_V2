@@ -77,6 +77,12 @@ export interface Item {
   shopify_needs_finishing: boolean
   shopify_order_id: string | null
   shopify_order_url: string | null
+  trade_in_cash_offer: number | null
+  trade_in_credit_offer: number | null
+  trade_in_choice: 'cash' | 'credit' | null
+  shopify_customer_id: string | null
+  shopify_customer_admin_url: string | null
+  shopify_store_credit_txn_id: string | null
 }
 
 export interface ItemSnapshot {
@@ -100,6 +106,9 @@ export interface ItemSnapshot {
   consignee_id: string | null
   brands: Array<{ id: string; name: string; abbreviation: string }>
   consignee: { id: string; name: string; abbreviation: string } | null
+  trade_in_cash_offer: number | null
+  trade_in_credit_offer: number | null
+  trade_in_choice: 'cash' | 'credit' | null
 }
 
 export interface ItemLog {
@@ -131,7 +140,30 @@ export interface ReconciliationRun {
   discrepancies_opened: number | null
   discrepancies_closed: number | null
   listing_statuses_synced: number | null
+  credit_customers_checked: number | null
+  credit_discrepancies_opened: number | null
+  credit_discrepancies_closed: number | null
   error: string | null
+}
+
+export interface StoreCreditDiscrepancy {
+  id: string
+  shopify_customer_id: string
+  ugis_balance: number
+  shopify_balance: number
+  detected_at: string
+  resolved_at: string | null
+}
+
+export interface StoreCreditLogEntry {
+  id: string
+  shopify_customer_id: string
+  amount: number
+  direction: 'credit' | 'debit'
+  source: 'trade_in' | 'redemption' | 'adjustment'
+  related_item_id: string | null
+  shopify_transaction_id: string | null
+  created_at: string
 }
 
 export type ShopifyDiscrepancyKind = 'sold_status' | 'listing_missing'

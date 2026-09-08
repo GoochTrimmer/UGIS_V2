@@ -69,6 +69,9 @@ export default function Logs() {
         consignee_id: s.consignee_id,
         brands: s.brands,
         consignee: s.consignee,
+        trade_in_cash_offer: s.trade_in_cash_offer ?? null,
+        trade_in_credit_offer: s.trade_in_credit_offer ?? null,
+        trade_in_choice: s.trade_in_choice ?? null,
       })
       await supabase.from('item_logs').update({ reverted: true }).eq('id', log.id)
       await qc.invalidateQueries({ queryKey: ['item_logs'] })

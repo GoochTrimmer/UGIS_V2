@@ -14,6 +14,9 @@ verify_jwt = false
 [functions.shopify-webhook-products-delete]
 verify_jwt = false
 
+[functions.shopify-webhook-store-credit]
+verify_jwt = false
+
 # One-time setup utility, meant to be run once via plain curl (no staff
 # login needed) then deleted — see the function's own comments. Takes no
 # user-supplied input (the callback URL is hardcoded), so the worst case of

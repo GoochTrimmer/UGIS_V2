@@ -4,6 +4,10 @@ import type { Item } from '../types'
 export interface MissingField {
   key: string
   label: string
+  // Payment-related fields (take-back/cost, selling price, and card fee when
+  // applicable) block a clean payout or sale record, so they're flagged with
+  // more urgency than the rest — red caution icon, sorted to the top.
+  priority?: boolean
 }
 
 type CompletenessItem = Pick<Item,
@@ -50,12 +54,12 @@ export function getMissingFields(item: CompletenessItem): MissingField[] {
 
   const isConsigned = !!item.consignee && !item.consignee.is_default_store
   if (isConsigned) {
-    if (item.takeback_price == null) missing.push({ key: 'takeback_price', label: 'Take-back Price' })
+    if (item.takeback_price == null) missing.push({ key: 'takeback_price', label: 'Take-back Price', priority: true })
   } else if (item.cost_amount == null) {
-    missing.push({ key: 'cost_amount', label: 'Cost' })
+    missing.push({ key: 'cost_amount', label: 'Cost', priority: true })
   }
 
-  if (item.selling_price == null) missing.push({ key: 'selling_price', label: 'Selling Price' })
+  if (item.selling_price == null) missing.push({ key: 'selling_price', label: 'Selling Price', priority: true })
 
   if (item.status === 'sold') {
     if (item.sold_price == null) missing.push({ key: 'sold_price', label: 'Sold Price' })
@@ -64,7 +68,7 @@ export function getMissingFields(item: CompletenessItem): MissingField[] {
     if (!item.payment_type) {
       missing.push({ key: 'payment_type', label: 'Payment Type' })
     } else if (paymentTypeHasFee(item.payment_type) && item.card_fee == null) {
-      missing.push({ key: 'card_fee', label: 'Card Fee' })
+      missing.push({ key: 'card_fee', label: 'Card Fee', priority: true })
     }
   }
 
@@ -73,4 +77,8 @@ export function getMissingFields(item: CompletenessItem): MissingField[] {
 
 export function isIncomplete(item: CompletenessItem): boolean {
   return getMissingFields(item).length > 0
+}
+
+export function hasPriorityMissing(missing: MissingField[]): boolean {
+  return missing.some(f => f.priority)
 }

@@ -12,8 +12,24 @@ import { STATUS_CONFIG } from '../lib/constants'
 import type { SortState, ShopifyStatusValue } from '../components/inventory/sortState'
 import type { ItemFilters, ItemStatus } from '../types'
 
+const STATUS_FILTER_KEY = 'ugis:inventory:statusFilter'
+
+// Persisted so the chosen tab (e.g. Sold, All) survives navigating away and
+// back — this page remounts on every tab switch, which would otherwise reset
+// to In Stock every time.
+function loadInitialStatus(): ItemStatus | undefined {
+  try {
+    const raw = localStorage.getItem(STATUS_FILTER_KEY)
+    if (raw == null) return 'in_stock'
+    if (raw === 'all') return undefined
+    return raw in STATUS_CONFIG ? (raw as ItemStatus) : 'in_stock'
+  } catch {
+    return 'in_stock'
+  }
+}
+
 export default function Inventory() {
-  const [filters, setFilters] = useState<ItemFilters>({ status: 'in_stock' })
+  const [filters, setFilters] = useState<ItemFilters>(() => ({ status: loadInitialStatus() }))
   const [addOpen, setAddOpen] = useState(false)
   const [sort, setSort] = useState<SortState>(null)
   const [bulkMode, setBulkMode] = useState(false)
@@ -66,8 +82,10 @@ export default function Inventory() {
     return acc
   }, {})
 
-  const setStatus = (status: ItemStatus | undefined) =>
+  const setStatus = (status: ItemStatus | undefined) => {
     setFilters(f => ({ ...f, status }))
+    try { localStorage.setItem(STATUS_FILTER_KEY, status ?? 'all') } catch { /* ignore */ }
+  }
 
   return (
     <Layout>

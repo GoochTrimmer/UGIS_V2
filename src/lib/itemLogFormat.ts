@@ -18,16 +18,21 @@ export const FIELD_LABELS: Record<string, string> = {
   consignee: 'Consignee',
   brands: 'Brands',
   shopify_needs_finishing: 'Shopify Listing',
+  trade_in_cash_offer: 'Trade-in Cash Offer',
+  trade_in_credit_offer: 'Trade-in Credit Offer',
+  trade_in_choice: 'Trade-in Outcome',
 }
 
 export function fmtVal(field: string, v: unknown): string {
   if (v === null || v === undefined || v === '') return '—'
   if (field === 'status') return STATUS_CONFIG[v as ItemStatus]?.label ?? String(v)
-  if (field === 'cost_amount' || field === 'takeback_price' || field === 'selling_price' || field === 'sold_price') {
+  if (field === 'cost_amount' || field === 'takeback_price' || field === 'selling_price' || field === 'sold_price'
+    || field === 'trade_in_cash_offer' || field === 'trade_in_credit_offer') {
     return `$${Number(v).toFixed(2)}`
   }
   if (field === 'sale_channel') return SALE_CHANNEL_CONFIG[v as SaleChannel]?.label ?? String(v)
   if (field === 'sale_geography') return SALE_GEOGRAPHY_CONFIG[v as SaleGeography]?.label ?? String(v)
   if (field === 'shopify_needs_finishing') return v ? 'Draft' : 'Live'
+  if (field === 'trade_in_choice') return v === 'credit' ? 'Store Credit' : v === 'cash' ? 'Cash' : String(v)
   return String(v)
 }

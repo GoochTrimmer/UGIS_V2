@@ -16,9 +16,34 @@
 // writes a reconciliation_runs row so the frontend can show a "check is
 // running" indicator and a last-run summary.
 import { corsPreflight, jsonResponse } from '../_shared/cors.ts'
-import { shopifyGraphql, gidToId } from '../_shared/shopify.ts'
+import { shopifyGraphql, gidToId, customerGid } from '../_shared/shopify.ts'
 import { getPrimaryLocationId } from '../_shared/inventory.ts'
 import { supabaseAdmin } from '../_shared/supabaseAdmin.ts'
+
+// Best current read of the Store Credit Admin API's balance shape — same
+// "unverified until it runs against the live schema" caveat as
+// shopify-issue-store-credit. A customer can in principle hold accounts in
+// more than one currency; summed here since UGIS tracks one ledger balance
+// per customer regardless of currency breakdown.
+const CUSTOMER_CREDIT_BALANCE = `
+  query customerCreditBalance($id: ID!) {
+    customer(id: $id) {
+      storeCreditAccounts(first: 10) {
+        edges { node { balance { amount } } }
+      }
+    }
+  }
+`
+
+async function fetchShopifyCreditBalance(customerId: string): Promise<number | null> {
+  const data = await shopifyGraphql<{
+    customer: { storeCreditAccounts: { edges: { node: { balance: { amount: string } } }[] } } | null
+  }>(CUSTOMER_CREDIT_BALANCE, { id: customerGid(customerId) })
+  if (!data.customer) return null
+  return data.customer.storeCreditAccounts.edges.reduce((sum, e) => sum + Number(e.node.balance.amount), 0)
+}
+
+const BALANCE_EPSILON = 0.01
 
 interface VariantNode {
   id: string
@@ -237,6 +262,63 @@ Deno.serve(async req => {
       else closed++
     }
 
+    // Store credit balance drift (spec §9 stage 5) — compares UGIS's summed
+    // ledger per customer against Shopify's actual reported balance, in
+    // case a redemption webhook was ever missed. Only customers UGIS
+    // actually has ledger rows for are worth checking; a customer with no
+    // trade-in history isn't this project's concern.
+    let creditCustomersChecked = 0
+    let creditOpened = 0
+    let creditClosed = 0
+    try {
+      const { data: ledgerRows, error: ledgerErr } = await db
+        .from('store_credit_log')
+        .select('shopify_customer_id, amount, direction')
+      if (ledgerErr) throw new Error(ledgerErr.message)
+
+      const ugisBalanceByCustomer = new Map<string, number>()
+      for (const row of ledgerRows ?? []) {
+        const id = row.shopify_customer_id as string
+        const delta = row.direction === 'credit' ? Number(row.amount) : -Number(row.amount)
+        ugisBalanceByCustomer.set(id, (ugisBalanceByCustomer.get(id) ?? 0) + delta)
+      }
+
+      const { data: openCreditRows, error: openCreditErr } = await db
+        .from('store_credit_discrepancies')
+        .select('id, shopify_customer_id')
+        .is('resolved_at', null)
+      if (openCreditErr) throw new Error(openCreditErr.message)
+      const openCreditByCustomer = new Map((openCreditRows ?? []).map(r => [r.shopify_customer_id as string, r.id as string]))
+
+      for (const [customerId, ugisBalance] of ugisBalanceByCustomer) {
+        creditCustomersChecked++
+        const shopifyBalance = await fetchShopifyCreditBalance(customerId)
+        const openRowId = openCreditByCustomer.get(customerId)
+        const drifted = shopifyBalance === null || Math.abs(shopifyBalance - ugisBalance) > BALANCE_EPSILON
+
+        if (openRowId && !drifted) {
+          const { error: closeErr } = await db.from('store_credit_discrepancies')
+            .update({ resolved_at: new Date().toISOString() }).eq('id', openRowId)
+          if (closeErr) console.error('[shopify-reconcile] failed to auto-close credit discrepancy', openRowId, closeErr)
+          else creditClosed++
+        } else if (!openRowId && drifted) {
+          const { error: insErr } = await db.from('store_credit_discrepancies').insert({
+            shopify_customer_id: customerId,
+            ugis_balance: ugisBalance,
+            shopify_balance: shopifyBalance ?? 0,
+          })
+          if (insErr) console.error('[shopify-reconcile] failed to open credit discrepancy', customerId, insErr)
+          else creditOpened++
+        }
+      }
+    } catch (err) {
+      // Best-effort pass — a failure here (e.g. the balance query shape
+      // being wrong against the live schema) shouldn't fail the whole
+      // reconciliation run, since the item-status pass above already
+      // completed successfully.
+      console.error('[shopify-reconcile] credit balance pass failed', err)
+    }
+
     await db.from('reconciliation_runs').update({
       status: 'completed',
       finished_at: new Date().toISOString(),
@@ -244,9 +326,15 @@ Deno.serve(async req => {
       discrepancies_opened: opened,
       discrepancies_closed: closed,
       listing_statuses_synced: listingStatusesSynced,
+      credit_customers_checked: creditCustomersChecked,
+      credit_discrepancies_opened: creditOpened,
+      credit_discrepancies_closed: creditClosed,
     }).eq('id', run.id)
 
-    return jsonResponse({ runId: run.id, itemsScanned: linkedItems.length, opened, closed, listingStatusesSynced })
+    return jsonResponse({
+      runId: run.id, itemsScanned: linkedItems.length, opened, closed, listingStatusesSynced,
+      creditCustomersChecked, creditOpened, creditClosed,
+    })
   } catch (err) {
     console.error('[shopify-reconcile]', err)
     await db.from('reconciliation_runs').update({

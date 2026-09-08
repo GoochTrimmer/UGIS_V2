@@ -134,6 +134,28 @@ export function variantGid(id: string): string {
   return id.startsWith('gid://') ? id : `gid://shopify/ProductVariant/${id}`
 }
 
+export function customerGid(id: string): string {
+  return id.startsWith('gid://') ? id : `gid://shopify/Customer/${id}`
+}
+
+const SHOP_CURRENCY_QUERY = `
+  query shopCurrency {
+    shop { currencyCode }
+  }
+`
+
+// Cached at module scope, same reasoning as getPrimaryLocationId in
+// _shared/inventory.ts — a store's currency doesn't change mid-invocation
+// (or realistically, ever), so there's no reason to re-fetch it per call.
+let cachedCurrencyCode: string | null = null
+
+export async function getShopCurrencyCode(): Promise<string> {
+  if (cachedCurrencyCode) return cachedCurrencyCode
+  const data = await shopifyGraphql<{ shop: { currencyCode: string } }>(SHOP_CURRENCY_QUERY)
+  cachedCurrencyCode = data.shop.currencyCode
+  return cachedCurrencyCode
+}
+
 /** Admin edit URL for a product, given its numeric or GID id. */
 export function adminProductUrl(productId: string): string {
   const domain = Deno.env.get('SHOPIFY_STORE_DOMAIN') ?? ''
@@ -146,4 +168,11 @@ export function adminOrderUrl(orderId: string): string {
   const domain = Deno.env.get('SHOPIFY_STORE_DOMAIN') ?? ''
   const storeHandle = domain.replace(/\.myshopify\.com$/, '')
   return `https://admin.shopify.com/store/${storeHandle}/orders/${gidToId(orderId)}`
+}
+
+/** Admin customer URL, given its numeric or GID id — same shape as adminProductUrl above. */
+export function adminCustomerUrl(customerId: string): string {
+  const domain = Deno.env.get('SHOPIFY_STORE_DOMAIN') ?? ''
+  const storeHandle = domain.replace(/\.myshopify\.com$/, '')
+  return `https://admin.shopify.com/store/${storeHandle}/customers/${gidToId(customerId)}`
 }

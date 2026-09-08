@@ -11,7 +11,7 @@ import BulkActionsBar from './BulkActionsBar'
 import type { Item } from '../../types'
 import type { SortState } from './sortState'
 import { shopifyStatusOf } from './sortState'
-import { isIncomplete, getMissingFields } from '../../lib/itemCompleteness'
+import { isIncomplete, getMissingFields, hasPriorityMissing } from '../../lib/itemCompleteness'
 
 function usePendingShopifyLinkIds(): Set<string> {
   const pending = useMutationState({
@@ -110,13 +110,19 @@ export default function InventoryTable({ items, sort, onSortChange, bulkMode, mi
     if (sort.field === 'flags') {
       // Items matching MORE of the selected flags rank higher — an item
       // that's both, say, Live and Incomplete outranks one matching only
-      // one of the two, rather than tying with it. Ties (equal match
-      // count) keep their original relative order (stable sort).
+      // one of the two, rather than tying with it. Within the Incomplete
+      // match, items missing a payment field (red ⚠, see itemCompleteness)
+      // rank above items only missing non-payment fields (amber ⚠), so a
+      // shopify-status match still outweighs it. Ties (equal score) keep
+      // their original relative order (stable sort).
       const { shopifyStatuses, incomplete } = sort
       const scoreOf = (item: Item) => {
         let score = 0
-        if (shopifyStatuses.length > 0 && shopifyStatuses.includes(shopifyStatusOf(item))) score++
-        if (incomplete && isIncomplete(item)) score++
+        if (shopifyStatuses.length > 0 && shopifyStatuses.includes(shopifyStatusOf(item))) score += 2
+        if (incomplete) {
+          const missing = getMissingFields(item)
+          if (missing.length > 0) score += hasPriorityMissing(missing) ? 2 : 1
+        }
         return score
       }
       return [...items].sort((a, b) => scoreOf(b) - scoreOf(a))
@@ -251,9 +257,12 @@ export default function InventoryTable({ items, sort, onSortChange, bulkMode, mi
                     ) : (
                       <ShopifyStatusDot item={item} pending={pendingShopifyLinkIds.has(item.id)} />
                     )}
-                    {isIncomplete(item) && (
-                      <span className="text-amber-400" title={`Missing: ${getMissingFields(item).map(f => f.label).join(', ')}`}>⚠</span>
-                    )}
+                    {isIncomplete(item) && (() => {
+                      const missing = getMissingFields(item)
+                      return (
+                        <span className={hasPriorityMissing(missing) ? 'text-red-500' : 'text-amber-400'} title={`Missing: ${missing.map(f => f.label).join(', ')}`}>⚠</span>
+                      )
+                    })()}
                     {item.readable_id}
                   </div>
                 </td>
@@ -348,9 +357,12 @@ export default function InventoryTable({ items, sort, onSortChange, bulkMode, mi
                   ) : (
                     <ShopifyStatusDot item={item} pending={pendingShopifyLinkIds.has(item.id)} />
                   )}
-                  {isIncomplete(item) && (
-                    <span className="text-amber-400" title={`Missing: ${getMissingFields(item).map(f => f.label).join(', ')}`}>⚠</span>
-                  )}
+                  {isIncomplete(item) && (() => {
+                    const missing = getMissingFields(item)
+                    return (
+                      <span className={hasPriorityMissing(missing) ? 'text-red-500' : 'text-amber-400'} title={`Missing: ${missing.map(f => f.label).join(', ')}`}>⚠</span>
+                    )
+                  })()}
                   {item.readable_id}{item.size ? <span className="text-gray-400"> · {item.size}</span> : null}
                 </p>
               </div>

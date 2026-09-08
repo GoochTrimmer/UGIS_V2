@@ -11,6 +11,14 @@ const SUBSCRIPTIONS: { topic: string; callbackUrl: string }[] = [
   { topic: 'ORDERS_PAID', callbackUrl: `${PROJECT_BASE}/shopify-webhook-orders-paid` },
   { topic: 'PRODUCTS_UPDATE', callbackUrl: `${PROJECT_BASE}/shopify-webhook-products-update` },
   { topic: 'PRODUCTS_DELETE', callbackUrl: `${PROJECT_BASE}/shopify-webhook-products-delete` },
+  // No store-credit webhook topic exists in Shopify's Admin API as of
+  // 2026-07 (confirmed against the live WebhookSubscriptionTopic enum —
+  // there is no STORE_CREDIT_* entry at all). shopify-webhook-store-credit
+  // is kept as dead code in case a future API version adds one; redemption
+  // sync for now runs entirely through shopify-reconcile's balance-drift
+  // pass instead. Not listed here since registering an unknown topic fails
+  // this whole call before any topic in the list gets attempted (a query-
+  // level validation error, not a per-topic one).
 ]
 
 const LIST_SUBSCRIPTIONS = `

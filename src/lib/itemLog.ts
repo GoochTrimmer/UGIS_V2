@@ -21,6 +21,9 @@ export function buildSnapshot(item: Item): ItemSnapshot {
     notes: item.notes,
     readable_id: item.readable_id,
     consignee_id: item.consignee_id,
+    trade_in_cash_offer: item.trade_in_cash_offer,
+    trade_in_credit_offer: item.trade_in_credit_offer,
+    trade_in_choice: item.trade_in_choice,
     brands: item.brands.map(b => ({ id: b.id, name: b.name, abbreviation: b.abbreviation })),
     consignee: item.consignee
       ? { id: item.consignee.id, name: item.consignee.name, abbreviation: item.consignee.abbreviation }
@@ -49,6 +52,9 @@ export function computeDiff(
     consignee_id: string | null
     consignee: { id: string; name: string } | null
     brands: Array<{ id: string; name: string }>
+    trade_in_cash_offer?: number | null
+    trade_in_credit_offer?: number | null
+    trade_in_choice?: string | null
   }
 ): Record<string, { from: unknown; to: unknown }> {
   const changes: Record<string, { from: unknown; to: unknown }> = {}
@@ -57,6 +63,7 @@ export function computeDiff(
     'name', 'size', 'status', 'season_year', 'season_period',
     'season_custom', 'cost_amount', 'takeback_price', 'selling_price', 'sold_price',
     'sale_channel', 'sale_geography', 'payment_type', 'card_fee', 'notes',
+    'trade_in_cash_offer', 'trade_in_credit_offer', 'trade_in_choice',
   ] as const
   for (const f of scalar) {
     const bv = before[f]

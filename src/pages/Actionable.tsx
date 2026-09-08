@@ -8,7 +8,7 @@ import ItemForm from '../components/inventory/ItemForm'
 import { supabase } from '../lib/supabase'
 import { STATUS_CONFIG } from '../lib/constants'
 import { writeItemLog } from '../lib/itemLog'
-import { getMissingFields } from '../lib/itemCompleteness'
+import { getMissingFields, hasPriorityMissing } from '../lib/itemCompleteness'
 import { useItems, useItemMutations } from '../hooks/useItems'
 import { useItemLogs } from '../hooks/useItemLogs'
 import {
@@ -17,7 +17,12 @@ import {
   useTriggerReconciliation,
   useResolveDiscrepancy,
 } from '../hooks/useReconciliation'
-import type { Item, ItemLog, ItemStatus, ShopifyDiscrepancy } from '../types'
+import {
+  useOpenStoreCreditDiscrepancies,
+  useResolveStoreCreditDiscrepancy,
+  useStoreCreditLiability,
+} from '../hooks/useStoreCredit'
+import type { Item, ItemLog, ItemStatus, ShopifyDiscrepancy, StoreCreditDiscrepancy } from '../types'
 
 function timeAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime()
@@ -188,17 +193,88 @@ function DiscrepancyRow({ discrepancy }: { discrepancy: ShopifyDiscrepancy }) {
   )
 }
 
+function StoreCreditDiscrepancyRow({ discrepancy }: { discrepancy: StoreCreditDiscrepancy }) {
+  const resolve = useResolveStoreCreditDiscrepancy()
+  const [resolving, setResolving] = useState(false)
+
+  const markReviewed = async () => {
+    setResolving(true)
+    try {
+      await resolve.mutateAsync(discrepancy.id)
+    } finally {
+      setResolving(false)
+    }
+  }
+
+  return (
+    <div className="px-4 py-3 border-b border-border last:border-b-0">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <p className="text-sm text-white font-medium font-mono">{discrepancy.shopify_customer_id}</p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            UGIS ledger: <span className="text-gray-300">${discrepancy.ugis_balance.toFixed(2)}</span>
+            {' · '}
+            Shopify balance: <span className="text-gray-300">${discrepancy.shopify_balance.toFixed(2)}</span>
+            {' · '}
+            detected {timeAgo(discrepancy.detected_at)}
+          </p>
+        </div>
+        <button className="btn-ghost py-1 px-2 text-xs shrink-0" disabled={resolving} onClick={() => void markReviewed()}>
+          {resolving ? 'Marking…' : 'Mark Reviewed'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function StoreCreditSection() {
+  const { data: discrepancies = [], isLoading } = useOpenStoreCreditDiscrepancies()
+  const { data: liability } = useStoreCreditLiability()
+
+  return (
+    <div>
+      <h2 className="text-sm font-medium text-white mb-2">Store Credit</h2>
+      <p className="text-xs text-gray-500 mb-3">
+        Outstanding liability: <span className="text-gray-300">${(liability ?? 0).toFixed(2)}</span> across UGIS's
+        ledger. Balance drift below means UGIS's record disagrees with Shopify's actual reported balance for that
+        customer — check directly in Shopify admin and mark reviewed once resolved; this doesn't auto-correct either
+        side.
+      </p>
+      <div className="card overflow-hidden">
+        {isLoading ? (
+          <div className="flex justify-center py-8"><Spinner /></div>
+        ) : discrepancies.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 text-gray-600">
+            <div className="text-3xl mb-2">✓</div>
+            <p className="text-sm">No balance drift — UGIS and Shopify agree.</p>
+          </div>
+        ) : (
+          discrepancies.map(d => <StoreCreditDiscrepancyRow key={d.id} discrepancy={d} />)
+        )}
+      </div>
+    </div>
+  )
+}
+
 function IncompleteItemRow({ item, onEdit }: { item: Item; onEdit: (item: Item) => void }) {
   const missing = getMissingFields(item)
+  const urgent = hasPriorityMissing(missing)
   return (
     <div className="px-4 py-3 border-b border-border last:border-b-0 flex items-center justify-between gap-3">
       <div className="min-w-0">
         <p className="text-sm text-white font-medium flex items-center gap-1.5 truncate">
-          <span className="text-amber-400 shrink-0">⚠</span>
+          <span className={`${urgent ? 'text-red-500' : 'text-amber-400'} shrink-0`}>⚠</span>
           {item.name}
           <span className="text-xs font-mono text-gray-500 shrink-0">{item.readable_id}</span>
         </p>
-        <p className="text-xs text-gray-500 mt-0.5">Missing: {missing.map(f => f.label).join(', ')}</p>
+        <p className="text-xs text-gray-500 mt-0.5">
+          Missing:{' '}
+          {missing.map((f, i) => (
+            <span key={f.key} className={f.priority ? 'text-red-400' : undefined}>
+              {f.label}{i < missing.length - 1 ? ', ' : ''}
+            </span>
+          ))}
+        </p>
       </div>
       <button className="btn-ghost py-1 px-2 text-xs shrink-0" onClick={() => onEdit(item)}>Edit</button>
     </div>
@@ -318,7 +394,13 @@ function AutoResolvedSection() {
 function IncompleteItemsSection() {
   const { data: items = [], isLoading } = useItems()
   const [editing, setEditing] = useState<Item | null>(null)
-  const incompleteItems = useMemo(() => items.filter(i => getMissingFields(i).length > 0), [items])
+  const incompleteItems = useMemo(() => {
+    return items
+      .map(item => ({ item, missing: getMissingFields(item) }))
+      .filter(({ missing }) => missing.length > 0)
+      .sort((a, b) => Number(hasPriorityMissing(b.missing)) - Number(hasPriorityMissing(a.missing)))
+      .map(({ item }) => item)
+  }, [items])
 
   return (
     <div>
@@ -327,7 +409,8 @@ function IncompleteItemsSection() {
       </h2>
       <p className="text-xs text-gray-500 mb-3">
         Items missing a selling price, consignee, or the applicable cost / take-back price — easy to miss when
-        an item is added quickly and finished off later.
+        an item is added quickly and finished off later. Items missing payment info (selling price, cost /
+        take-back, or card fee) are flagged <span className="text-red-400">red</span> and sorted to the top.
       </p>
       <div className="card overflow-hidden">
         {isLoading ? (
@@ -398,7 +481,8 @@ export default function Actionable() {
                 Last run {timeAgo(latestRun.finished_at ?? latestRun.started_at)} — scanned {latestRun.items_scanned ?? 0} linked
                 item{latestRun.items_scanned === 1 ? '' : 's'}, flagged {latestRun.discrepancies_opened ?? 0}, auto-resolved{' '}
                 {latestRun.discrepancies_closed ?? 0}
-                {!!latestRun.listing_statuses_synced && `, corrected ${latestRun.listing_statuses_synced} Draft/Live status${latestRun.listing_statuses_synced === 1 ? '' : 'es'}`}.
+                {!!latestRun.listing_statuses_synced && `, corrected ${latestRun.listing_statuses_synced} Draft/Live status${latestRun.listing_statuses_synced === 1 ? '' : 'es'}`}
+                {!!latestRun.credit_customers_checked && `, checked store credit for ${latestRun.credit_customers_checked} customer${latestRun.credit_customers_checked === 1 ? '' : 's'}`}.
               </span>
             )}
             {!running && latestRun?.status === 'failed' && (
@@ -420,6 +504,8 @@ export default function Actionable() {
             )}
           </div>
         </div>
+
+        <StoreCreditSection />
 
         <AutoResolvedSection />
 

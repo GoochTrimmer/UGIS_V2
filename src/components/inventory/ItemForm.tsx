@@ -3,6 +3,7 @@ import { useForm } from 'react-hook-form'
 import { useItemMutations } from '../../hooks/useItems'
 import { useConsignees } from '../../hooks/useConsignees'
 import { useBrands } from '../../hooks/useBrands'
+import { useIssueStoreCredit } from '../../hooks/useStoreCredit'
 import { invokeEdgeFunction } from '../../lib/edgeFunctions'
 import BrandSelector from '../brands/BrandSelector'
 import StatusTimeline from './StatusTimeline'
@@ -13,6 +14,8 @@ import BrandForm from '../brands/BrandForm'
 import ConsigneeForm from '../consignees/ConsigneeForm'
 import { STATUS_CONFIG, SEASON_PERIODS, YEAR_OPTIONS, SALE_CHANNEL_CONFIG, SALE_GEOGRAPHY_CONFIG, PAYMENT_TYPE_CONFIG, paymentTypeHasFee } from '../../lib/constants'
 import type { Item, Brand, ItemStatus, SeasonPeriod, SaleChannel, SaleGeography, PaymentType } from '../../types'
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 // datetime-local <-> ISO helpers (datetime-local has no timezone; treated as local time)
 function isoToDatetimeLocal(iso: string | null): string {
@@ -58,15 +61,23 @@ interface ItemFormValues {
   notes: string
   ready_to_list: boolean
   scheduled_drop_at: string
+  trade_in_cash_offer: string
+  trade_in_credit_offer: string
+  trade_in_choice: 'cash' | 'credit' | ''
 }
 
 export default function ItemForm({ item, onDone }: ItemFormProps) {
   const { create, update, markShopifyFinished, unbindShopify, pushShopifyDraft, linkShopifyProduct } = useItemMutations()
+  const issueStoreCredit = useIssueStoreCredit()
   const [tab, setTab] = useState<'details' | 'history'>('details')
   const { data: consignees = [] } = useConsignees()
   const { data: allBrands = [] } = useBrands()
   const [selectedBrands, setSelectedBrands] = useState<Brand[]>([])
   const [isConsigned, setIsConsigned] = useState(false)
+  const [isTradeIn, setIsTradeIn] = useState(false)
+  const [creditEmail, setCreditEmail] = useState('')
+  const [creditPhone, setCreditPhone] = useState('')
+  const [creditError, setCreditError] = useState<string | null>(null)
   const [showNewBrand, setShowNewBrand] = useState(false)
   const [showNewConsignee, setShowNewConsignee] = useState(false)
   const [shopifyError, setShopifyError] = useState<string | null>(null)
@@ -86,6 +97,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       selling_price: '', sold_price: '', sale_channel: '', sale_geography: '',
       payment_type: '', card_fee: '', notes: '',
       ready_to_list: false, scheduled_drop_at: '',
+      trade_in_cash_offer: '', trade_in_credit_offer: '', trade_in_choice: '',
     }
   })
 
@@ -96,12 +108,18 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
   const watchedConsigneeId = watch('consignee_id')
   const watchedStatus = watch('status')
   const watchedPaymentType = watch('payment_type')
+  const watchedTradeInChoice = watch('trade_in_choice')
+  const watchedTradeInCashOffer = watch('trade_in_cash_offer')
+  const watchedTradeInCreditOffer = watch('trade_in_credit_offer')
   const sizeReg = register('size')
+  const tradeInChoiceField = register('trade_in_choice')
 
   useEffect(() => {
     if (item) {
-      const itemIsConsigned = !!item.consignee && item.consignee.id !== storeConsignee?.id
+      const itemIsTradeIn = !!item.trade_in_choice || item.trade_in_cash_offer != null || item.trade_in_credit_offer != null
+      const itemIsConsigned = !itemIsTradeIn && !!item.consignee && item.consignee.id !== storeConsignee?.id
       setIsConsigned(itemIsConsigned)
+      setIsTradeIn(itemIsTradeIn)
       reset({
         name: item.name,
         size: item.size ?? '',
@@ -121,15 +139,20 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
         notes: item.notes ?? '',
         ready_to_list: item.ready_to_list,
         scheduled_drop_at: isoToDatetimeLocal(item.scheduled_drop_at),
+        trade_in_cash_offer: item.trade_in_cash_offer ? String(item.trade_in_cash_offer) : '',
+        trade_in_credit_offer: item.trade_in_credit_offer ? String(item.trade_in_credit_offer) : '',
+        trade_in_choice: item.trade_in_choice ?? '',
       })
       setSelectedBrands(item.brands ?? [])
     } else {
       setIsConsigned(false)
+      setIsTradeIn(false)
       reset({
         name: '', size: '', status: 'in_stock', season_year: '', season_period: 'SS',
         season_custom: '', consignee_id: storeConsignee?.id ?? '',
         cost_amount: '', takeback_price: '', selling_price: '', notes: '',
         ready_to_list: false, scheduled_drop_at: '',
+        trade_in_cash_offer: '', trade_in_credit_offer: '', trade_in_choice: '',
       })
     }
     setShopifyError(null)
@@ -138,6 +161,9 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
     setReassignUrl('')
     setReassignProduct(null)
     setReassignVariantId('')
+    setCreditEmail('')
+    setCreditPhone('')
+    setCreditError(null)
     setTab('details')
     // storeConsignee intentionally omitted — re-run only when item changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -152,10 +178,23 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
 
   const handleConsignedToggle = (checked: boolean) => {
     setIsConsigned(checked)
-    if (!checked) {
-      setValue('consignee_id', storeConsignee?.id ?? '')
-    } else {
+    if (checked) {
+      setIsTradeIn(false)
       setValue('consignee_id', '')
+    } else {
+      setValue('consignee_id', storeConsignee?.id ?? '')
+    }
+  }
+
+  // Trade-in items are always store-owned (spec: the shop becomes sole
+  // owner once credit/cash is paid out) — mutually exclusive with
+  // consignment rather than a separate flag combination staff could
+  // accidentally leave in an inconsistent state.
+  const handleTradeInToggle = (checked: boolean) => {
+    setIsTradeIn(checked)
+    if (checked) {
+      setIsConsigned(false)
+      setValue('consignee_id', storeConsignee?.id ?? '')
     }
   }
 
@@ -174,6 +213,26 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       ? (consignees.find(c => c.id === data.consignee_id) ?? null)
       : storeConsignee
 
+    // A trade-in's cost basis IS the offer amount paid out — no separate
+    // manual cost entry to keep in sync with it (see the Cost field in the
+    // trade-in pricing block below). Null while the customer's choice is
+    // still pending, since the true cost isn't settled yet.
+    const tradeInCashOffer = isTradeIn && data.trade_in_cash_offer ? parseFloat(data.trade_in_cash_offer) : null
+    const tradeInCreditOffer = isTradeIn && data.trade_in_credit_offer ? parseFloat(data.trade_in_credit_offer) : null
+    const tradeInChoice = isTradeIn && data.trade_in_choice ? data.trade_in_choice : null
+    const tradeInCost = tradeInChoice === 'cash' ? tradeInCashOffer : tradeInChoice === 'credit' ? tradeInCreditOffer : null
+
+    // New items have no id yet to attach store credit to, so it can't be
+    // issued until after creation (below) — but a bad email is worth
+    // catching now rather than after the item's already been saved.
+    if (!item && tradeInChoice === 'credit') {
+      const email = creditEmail.trim()
+      if (email && !EMAIL_RE.test(email)) {
+        setCreditError('That email address doesn\'t look valid.')
+        return
+      }
+    }
+
     const payload = {
       name: data.name.trim(),
       size: data.size.trim() || null,
@@ -182,7 +241,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       season_period: data.season_period || null,
       season_custom: data.season_period === 'Custom' ? data.season_custom.trim() : null,
       consignee_id: effectiveConsignee?.id ?? null,
-      cost_amount: !isConsigned && data.cost_amount ? parseFloat(data.cost_amount) : null,
+      cost_amount: isTradeIn ? tradeInCost : (!isConsigned && data.cost_amount ? parseFloat(data.cost_amount) : null),
       takeback_price: isConsigned && data.takeback_price ? parseFloat(data.takeback_price) : null,
       selling_price: data.selling_price ? parseFloat(data.selling_price) : null,
       sold_price: data.status === 'sold' && data.sold_price ? parseFloat(data.sold_price) : null,
@@ -193,6 +252,9 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       notes: data.notes.trim() || null,
       ready_to_list: data.ready_to_list,
       scheduled_drop_at: datetimeLocalToIso(data.scheduled_drop_at),
+      trade_in_cash_offer: tradeInCashOffer,
+      trade_in_credit_offer: tradeInCreditOffer,
+      trade_in_choice: tradeInChoice,
       brands: selectedBrands,
       consignee: effectiveConsignee,
     }
@@ -208,7 +270,19 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
           if (shouldPushDraft) await pushToShopify(item.id)
         } else {
           const created = await create.mutateAsync(payload)
-          if (shouldPushDraft) await pushToShopify((created as { id: string }).id)
+          const createdId = (created as { id: string }).id
+          if (shouldPushDraft) await pushToShopify(createdId)
+          if (tradeInChoice === 'credit' && (creditEmail.trim() || creditPhone.trim())) {
+            try {
+              await issueStoreCredit.mutateAsync({
+                itemId: createdId,
+                customerEmail: creditEmail.trim() || undefined,
+                customerPhone: creditPhone.trim() || undefined,
+              })
+            } catch (err) {
+              console.error('[ItemForm] store credit issue failed', err)
+            }
+          }
         }
       } catch (err) {
         console.error('[ItemForm] save failed', err)
@@ -241,6 +315,40 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       onDone()
     } catch (err) {
       setShopifyError(err instanceof Error ? err.message : 'Failed to publish on Shopify')
+    }
+  }
+
+  const issueCredit = async () => {
+    if (!item) return
+    setCreditError(null)
+
+    if (!item.shopify_customer_id) {
+      const email = creditEmail.trim()
+      const phone = creditPhone.trim()
+      if (!email && !phone) {
+        setCreditError('Enter a customer email or phone number to issue store credit.')
+        return
+      }
+      if (email && !EMAIL_RE.test(email)) {
+        setCreditError('That email address doesn\'t look valid.')
+        return
+      }
+    }
+
+    try {
+      await issueStoreCredit.mutateAsync({
+        itemId: item.id,
+        customerEmail: creditEmail.trim() || undefined,
+        customerPhone: creditPhone.trim() || undefined,
+      })
+      // Closes rather than staying open to reflect the new txn id in
+      // place — same pattern as markFinished/retryShopifyPush below: the
+      // `item` prop here is a snapshot passed in when the modal opened, not
+      // a live subscription, so it wouldn't pick up the change on its own
+      // until reopened anyway.
+      onDone()
+    } catch (err) {
+      setCreditError(err instanceof Error ? err.message : 'Failed to issue store credit')
     }
   }
 
@@ -368,6 +476,14 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
         </div>
       )}
 
+      {item?.trade_in_choice && (
+        <div className="flex items-center gap-1.5 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded px-2.5 py-1.5 w-fit">
+          <span>⇄</span>
+          Traded in for {item.trade_in_choice === 'credit' ? 'store credit' : 'cash'} — $
+          {(item.trade_in_choice === 'credit' ? item.trade_in_credit_offer : item.trade_in_cash_offer)?.toFixed(2)}
+        </div>
+      )}
+
       {showHistory && (
         <div className="space-y-5">
           <div>
@@ -465,6 +581,120 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
         </label>
       </div>
 
+      {/* Trade-in toggle */}
+      <div className="flex items-center gap-3 py-1">
+        <input
+          id="is-trade-in"
+          type="checkbox"
+          className="w-4 h-4 rounded border-border bg-surface-2 accent-white cursor-pointer"
+          checked={isTradeIn}
+          onChange={e => handleTradeInToggle(e.target.checked)}
+        />
+        <label htmlFor="is-trade-in" className="text-sm text-gray-300 cursor-pointer select-none">
+          Trade-in item
+          <span className="text-gray-600 font-normal ml-1">(customer traded this in for cash or store credit — always store-owned)</span>
+        </label>
+      </div>
+
+      {/* Trade-in appraisal — cash/credit offer, customer's choice, and
+          (once credit is chosen) issuing the actual Shopify store credit. */}
+      {isTradeIn && (
+        <div className="border border-border rounded-lg px-3 py-3 space-y-3 bg-surface-2/40">
+          <div>
+            <label className="label">Customer Chose</label>
+            <select
+              className="input"
+              {...tradeInChoiceField}
+              onChange={e => {
+                void tradeInChoiceField.onChange(e)
+                // Clear the other offer field so a stale value from a
+                // since-abandoned choice can't linger into the cost basis.
+                if (e.target.value === 'cash') setValue('trade_in_credit_offer', '')
+                else if (e.target.value === 'credit') setValue('trade_in_cash_offer', '')
+              }}
+            >
+              <option value="">— pending customer decision —</option>
+              <option value="cash">Cash</option>
+              <option value="credit">Store Credit</option>
+            </select>
+          </div>
+
+          {watchedTradeInChoice === 'cash' && (
+            <div>
+              <label className="label">Cash Offer</label>
+              <input className="input" type="number" step="0.01" {...register('trade_in_cash_offer')} placeholder="0.00" />
+            </div>
+          )}
+
+          {watchedTradeInChoice === 'credit' && (
+            <div>
+              <label className="label">Credit Offer</label>
+              <input className="input" type="number" step="0.01" {...register('trade_in_credit_offer')} placeholder="0.00" />
+            </div>
+          )}
+
+          {!watchedTradeInChoice && (
+            <p className="text-xs text-gray-600">Select cash or store credit to enter the offer amount.</p>
+          )}
+
+          {watchedTradeInChoice === 'credit' && (
+            <div className="border-t border-border pt-3 space-y-2">
+              {item?.shopify_store_credit_txn_id ? (
+                <div className="flex items-center justify-between gap-2 text-xs bg-surface-2 border border-border rounded px-2.5 py-1.5">
+                  <span className="text-emerald-400">✓ ${item.trade_in_credit_offer?.toFixed(2)} store credit issued</span>
+                  {item.shopify_customer_admin_url && (
+                    <a href={item.shopify_customer_admin_url} target="_blank" rel="noreferrer" className="text-gray-300 hover:text-white transition-colors shrink-0">
+                      View customer on Shopify →
+                    </a>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <p className="text-xs text-gray-600">
+                    Store credit attaches to a Shopify customer account — needs an email or phone to look up or create one.
+                    {!item && ' Issued automatically once this item is saved.'}
+                  </p>
+                  {!item?.shopify_customer_id && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        className="input text-xs"
+                        type="email"
+                        placeholder="Customer email"
+                        value={creditEmail}
+                        onChange={e => { setCreditEmail(e.target.value); setCreditError(null) }}
+                      />
+                      <input
+                        className="input text-xs"
+                        type="tel"
+                        inputMode="numeric"
+                        placeholder="Or phone"
+                        value={creditPhone}
+                        onChange={e => { setCreditPhone(e.target.value.replace(/\D/g, '')); setCreditError(null) }}
+                      />
+                    </div>
+                  )}
+                  {item && (
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        className="btn-primary text-xs"
+                        disabled={issueStoreCredit.isPending || !watchedTradeInCreditOffer}
+                        onClick={() => void issueCredit()}
+                      >
+                        {issueStoreCredit.isPending ? 'Issuing…' : 'Issue Store Credit'}
+                      </button>
+                    </div>
+                  )}
+                  {creditError && (
+                    <p className="text-xs text-red-400 bg-red-900/20 border border-red-900/40 rounded px-2 py-1.5">{creditError}</p>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Consignee selector — only when consigned */}
       {isConsigned && (
         <div>
@@ -490,6 +720,21 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
           <div>
             <label className="label">Take-back Price</label>
             <input className="input" type="number" step="0.01" {...register('takeback_price')} placeholder="0.00" />
+          </div>
+          <div>
+            <label className="label">Selling Price</label>
+            <input className="input" type="number" step="0.01" {...register('selling_price')} placeholder="0.00" />
+          </div>
+        </div>
+      ) : isTradeIn ? (
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="label">Cost <span className="text-gray-600 font-normal">(from trade-in offer)</span></label>
+            <div className="input flex items-center text-gray-400 cursor-not-allowed">
+              {watchedTradeInChoice === 'credit' && watchedTradeInCreditOffer ? `$${Number(watchedTradeInCreditOffer).toFixed(2)}`
+                : watchedTradeInChoice === 'cash' && watchedTradeInCashOffer ? `$${Number(watchedTradeInCashOffer).toFixed(2)}`
+                : '— pending customer choice —'}
+            </div>
           </div>
           <div>
             <label className="label">Selling Price</label>
