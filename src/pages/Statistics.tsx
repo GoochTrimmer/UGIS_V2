@@ -7,6 +7,7 @@ import {
 import { useItems } from '../hooks/useItems'
 import { useBrands } from '../hooks/useBrands'
 import { useConsignees } from '../hooks/useConsignees'
+import { useSoldDates } from '../hooks/useItemStatusHistory'
 import Layout from '../components/layout/Layout'
 import Spinner from '../components/ui/Spinner'
 import MultiSelect from '../components/ui/MultiSelect'
@@ -27,6 +28,53 @@ function fmtFull(n: number): string {
 function itemCost(item: Item): number {
   if (item.consignee && !item.consignee.is_default_store) return item.takeback_price ?? 0
   return item.cost_amount ?? 0
+}
+
+// ISO week (Monday start), keyed by that Monday's date so weeks sort and
+// dedupe correctly regardless of which day within the week a sale fell on.
+function isoWeekKey(d: Date): string {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
+  const day = date.getUTCDay() || 7
+  date.setUTCDate(date.getUTCDate() - day + 1)
+  return date.toISOString().slice(0, 10)
+}
+
+function monthKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+function yearKey(d: Date): string {
+  return String(d.getFullYear())
+}
+
+// "Sep Wk1" — short and unambiguous (a bare date like "7 Sep" reads as a
+// day, not a week). Numbered by which Monday of the month it is, not the
+// ISO week-of-year number, since staff think in terms of "the month's 1st/
+// 2nd/3rd week," not week 37.
+function weekLabel(key: string): string {
+  const d = new Date(`${key}T00:00:00Z`)
+  const month = d.toLocaleDateString('en-SG', { month: 'short', timeZone: 'UTC' })
+  const weekOfMonth = Math.ceil(d.getUTCDate() / 7)
+  return `${month} Wk${weekOfMonth}`
+}
+
+// The actual date range, e.g. "1–7 Sep" — shown in the chart tooltip since
+// "Sep Wk1" alone doesn't say which calendar days that covers.
+function weekRangeLabel(key: string): string {
+  const start = new Date(`${key}T00:00:00Z`)
+  const end = new Date(start)
+  end.setUTCDate(end.getUTCDate() + 6)
+  const fmt = (d: Date) => d.toLocaleDateString('en-SG', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+  return `${fmt(start)} – ${fmt(end)}`
+}
+
+function monthLabel(key: string): string {
+  const [y, m] = key.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-SG', { month: 'short', year: 'numeric', timeZone: 'UTC' })
+}
+
+function yearLabel(key: string): string {
+  return key
 }
 
 const STATUS_ORDER: ItemStatus[] = [
@@ -130,9 +178,18 @@ export default function Statistics() {
   const { data: brands = [] } = useBrands()
   const { data: consignees = [] } = useConsignees()
 
+  const { data: soldDates } = useSoldDates()
+
   const [brandFilters, setBrandFilters] = useState<string[]>([])
   const [consigneeFilters, setConsigneeFilters] = useState<string[]>([])
   const [groupByParent, setGroupByParent] = useState(true)
+  const [earningsPeriod, setEarningsPeriod] = useState<'week' | 'month' | 'year'>('month')
+  // Index (into that granularity's full period list) of the rightmost bar
+  // shown — null tracks "latest" so new sales keep the window current
+  // without needing to reset navigation on every refetch. Prev/Next below
+  // walk this one period at a time, clamped to periods that actually have
+  // data — never past the edges into an empty future/past.
+  const [earningsEndIndex, setEarningsEndIndex] = useState<number | null>(null)
 
   const items = useMemo(() => {
     let list = allItems
@@ -175,6 +232,76 @@ export default function Statistics() {
       realizedProfit,
     }
   }, [items])
+
+  // ── Earnings over time ───────────────────────────────────────────────────────
+  // Bucketed by each item's most recent transition to 'sold' (from
+  // item_status_history via useSoldDates), not items.updated_at — an item
+  // can be edited for unrelated reasons long after it actually sold, which
+  // would otherwise put it in the wrong week/month.
+
+  interface PeriodRow { key: string; name: string; detail: string; revenue: number; cost: number; fees: number; profit: number }
+
+  const earnings = useMemo(() => {
+    const weekly = new Map<string, { revenue: number; cost: number; fees: number }>()
+    const monthly = new Map<string, { revenue: number; cost: number; fees: number }>()
+    const yearly = new Map<string, { revenue: number; cost: number; fees: number }>()
+    if (soldDates) {
+      for (const item of items) {
+        if (item.status !== 'sold') continue
+        const soldAt = soldDates.get(item.id)
+        if (!soldAt) continue
+        const d = new Date(soldAt)
+        const revenue = item.sold_price ?? item.selling_price ?? 0
+        const cost = itemCost(item)
+        const fees = item.card_fee ?? 0
+
+        const wKey = isoWeekKey(d)
+        const w = weekly.get(wKey) ?? { revenue: 0, cost: 0, fees: 0 }
+        w.revenue += revenue; w.cost += cost; w.fees += fees
+        weekly.set(wKey, w)
+
+        const mKey = monthKey(d)
+        const m = monthly.get(mKey) ?? { revenue: 0, cost: 0, fees: 0 }
+        m.revenue += revenue; m.cost += cost; m.fees += fees
+        monthly.set(mKey, m)
+
+        const yKey = yearKey(d)
+        const y = yearly.get(yKey) ?? { revenue: 0, cost: 0, fees: 0 }
+        y.revenue += revenue; y.cost += cost; y.fees += fees
+        yearly.set(yKey, y)
+      }
+    }
+    const toRows = (
+      map: Map<string, { revenue: number; cost: number; fees: number }>,
+      label: (k: string) => string,
+      detail: (k: string) => string,
+    ): PeriodRow[] =>
+      [...map.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([key, v]) => ({ key, name: label(key), detail: detail(key), revenue: v.revenue, cost: v.cost, fees: v.fees, profit: v.revenue - v.cost - v.fees }))
+    // Full history, unsliced — windowing for display happens below via
+    // earningsEndIndex, so Prev/Next has something to actually page through.
+    return {
+      weekly: toRows(weekly, weekLabel, weekRangeLabel),
+      monthly: toRows(monthly, monthLabel, monthLabel),
+      yearly: toRows(yearly, yearLabel, yearLabel),
+    }
+  }, [items, soldDates])
+
+  const EARNINGS_WINDOW = 12
+  const earningsList = earningsPeriod === 'week' ? earnings.weekly : earningsPeriod === 'month' ? earnings.monthly : earnings.yearly
+  const earningsEnd = earningsEndIndex == null ? earningsList.length - 1 : Math.min(earningsEndIndex, earningsList.length - 1)
+  const earningsStart = Math.max(0, earningsEnd - EARNINGS_WINDOW + 1)
+  const earningsData = earningsList.slice(earningsStart, earningsEnd + 1)
+  const currentPeriod = earningsList[earningsEnd]
+  const canGoEarlier = earningsEnd > 0
+  const canGoLater = earningsEnd < earningsList.length - 1
+  const periodNoun = earningsPeriod === 'week' ? 'Week' : earningsPeriod === 'month' ? 'Month' : 'Year'
+
+  const changeEarningsPeriod = (p: 'week' | 'month' | 'year') => {
+    setEarningsPeriod(p)
+    setEarningsEndIndex(null)
+  }
 
   // ── Chart data ────────────────────────────────────────────────────────────────
 
@@ -383,6 +510,131 @@ export default function Statistics() {
             sub="revenue minus cost of sales minus fees"
             tone={metrics.realizedProfit > 0 ? 'positive' : metrics.realizedProfit < 0 ? 'negative' : 'neutral'}
           />
+        </div>
+
+        {/* Earnings over time */}
+        <div className="card p-4 mb-4">
+          <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
+            <div>
+              <p className="text-xs font-medium text-white">Earnings Over Time</p>
+              <p className="text-xs text-gray-600 mt-0.5">
+                by date sold · revenue, cost of sales, and net profit — check this against overheads like rent
+              </p>
+            </div>
+            <div className="flex text-xs border border-border rounded overflow-hidden shrink-0">
+              <button
+                className={`px-2.5 py-1 transition-colors ${earningsPeriod === 'week' ? 'bg-surface-3 text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                onClick={() => changeEarningsPeriod('week')}
+              >
+                Weekly
+              </button>
+              <button
+                className={`px-2.5 py-1 transition-colors border-l border-border ${earningsPeriod === 'month' ? 'bg-surface-3 text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                onClick={() => changeEarningsPeriod('month')}
+              >
+                Monthly
+              </button>
+              <button
+                className={`px-2.5 py-1 transition-colors border-l border-border ${earningsPeriod === 'year' ? 'bg-surface-3 text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                onClick={() => changeEarningsPeriod('year')}
+              >
+                Yearly
+              </button>
+            </div>
+          </div>
+
+          {earningsList.length > 0 && (
+            <div className="flex items-center justify-center gap-3 mb-4">
+              <button
+                type="button"
+                className="btn-ghost px-2 py-1 text-xs disabled:opacity-30 disabled:cursor-not-allowed"
+                disabled={!canGoEarlier}
+                onClick={() => setEarningsEndIndex(earningsEnd - 1)}
+                title={`Earlier ${periodNoun.toLowerCase()}`}
+              >
+                ← Earlier
+              </button>
+              <span className="text-xs text-white font-medium min-w-[7rem] text-center" title={currentPeriod?.detail}>
+                {currentPeriod?.name}
+              </span>
+              <button
+                type="button"
+                className="btn-ghost px-2 py-1 text-xs disabled:opacity-30 disabled:cursor-not-allowed"
+                disabled={!canGoLater}
+                onClick={() => setEarningsEndIndex(earningsEnd + 1)}
+                title={`Later ${periodNoun.toLowerCase()}`}
+              >
+                Later →
+              </button>
+              {canGoLater && (
+                <button
+                  type="button"
+                  className="text-xs text-gray-600 hover:text-white transition-colors ml-1"
+                  onClick={() => setEarningsEndIndex(null)}
+                >
+                  Jump to latest
+                </button>
+              )}
+            </div>
+          )}
+
+          {currentPeriod && (
+            <div className="grid grid-cols-3 gap-3 mb-4">
+              <StatCard label={`${currentPeriod.name} — Revenue`} value={fmtFull(currentPeriod.revenue)} />
+              <StatCard label={`${currentPeriod.name} — Cost & Fees`} value={fmtFull(currentPeriod.cost + currentPeriod.fees)} />
+              <StatCard
+                label={`${currentPeriod.name} — Profit`}
+                value={fmtFull(currentPeriod.profit)}
+                tone={currentPeriod.profit > 0 ? 'positive' : currentPeriod.profit < 0 ? 'negative' : 'neutral'}
+              />
+            </div>
+          )}
+
+          {earningsData.length === 0 ? (
+            <p className="text-xs text-gray-600 text-center py-10">No sales recorded yet.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={earningsData} margin={{ left: 4, right: 16, top: 4, bottom: 4 }}>
+                <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#888' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: '#555' }} tickFormatter={fmtShort} axisLine={false} tickLine={false} />
+                <Tooltip
+                  {...TOOLTIP_STYLE}
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  formatter={(v: unknown, name: any) => [fmtFull(v as number), name === 'revenue' ? 'Revenue' : name === 'cost' ? 'Cost of sales' : 'Profit'] as any}
+                  labelFormatter={(label: unknown) => earningsData.find(r => r.name === String(label))?.detail ?? String(label)}
+                  cursor={{ fill: 'rgba(255,255,255,0.03)' }}
+                />
+                <Legend
+                  iconType="circle"
+                  iconSize={8}
+                  formatter={value => (
+                    <span style={{ fontSize: 11, color: '#666' }}>
+                      {value === 'revenue' ? 'Revenue' : value === 'cost' ? 'Cost of sales' : 'Profit'}
+                    </span>
+                  )}
+                />
+                <Bar dataKey="revenue" name="revenue" fill="#6366f1" radius={[3, 3, 0, 0]} maxBarSize={28}>
+                  {earningsData.map((row, i) => (
+                    <Cell key={i} fillOpacity={row.key === currentPeriod?.key ? 1 : 0.55} />
+                  ))}
+                </Bar>
+                <Bar dataKey="cost" name="cost" fill="#4b5563" radius={[3, 3, 0, 0]} maxBarSize={28}>
+                  {earningsData.map((row, i) => (
+                    <Cell key={i} fillOpacity={row.key === currentPeriod?.key ? 1 : 0.55} />
+                  ))}
+                </Bar>
+                <Bar dataKey="profit" name="profit" radius={[3, 3, 0, 0]} maxBarSize={28}>
+                  {earningsData.map((row, i) => (
+                    <Cell
+                      key={i}
+                      fill={row.profit >= 0 ? '#34d399' : '#f87171'}
+                      fillOpacity={row.key === currentPeriod?.key ? 1 : 0.55}
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
         </div>
 
         {/* Charts — top row */}
