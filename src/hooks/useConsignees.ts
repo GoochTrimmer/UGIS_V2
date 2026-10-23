@@ -18,16 +18,22 @@ export function useConsigneeItemCounts(): Map<string, number> {
   return counts
 }
 
-type ConsigneeInsert = Omit<Consignee, 'id' | 'created_at' | 'is_default_store'> & { is_default_store?: boolean }
+// is_default_store is now set only via the Store tag (see sync_store_tag
+// trigger, 018) — never written directly by the app. tags is a joined
+// read-only array, not an insertable/updatable column.
+type ConsigneeInsert = Omit<Consignee, 'id' | 'created_at' | 'is_default_store' | 'tags'>
 type ConsigneeUpdate = Pick<Consignee, 'id'> & Partial<ConsigneeInsert>
 
 async function fetchConsignees(): Promise<Consignee[]> {
   const { data, error } = await supabase
     .from('consignees')
-    .select('*')
+    .select('*, tags:consignee_tag_links(tag:consignee_tags(id, name, is_store))')
     .order('name')
   if (error) throw error
-  return data as Consignee[]
+  return (data as unknown as Array<Record<string, unknown> & { tags: { tag: unknown }[] }>).map(row => ({
+    ...row,
+    tags: row.tags.map(t => t.tag),
+  })) as Consignee[]
 }
 
 export function useConsignees() {

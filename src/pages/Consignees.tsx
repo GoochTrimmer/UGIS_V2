@@ -146,6 +146,18 @@ function ConsigneePanel({ consignee }: { consignee: Consignee }) {
 
       {/* Consignee meta */}
       <div className="px-5 py-4 border-b border-border space-y-1.5">
+        {consignee.tags.length > 0 && (
+          <div className="flex gap-2 text-xs flex-wrap">
+            {consignee.tags.map(tag => (
+              <span
+                key={tag.id}
+                className={`rounded px-1.5 py-0.5 border ${tag.is_store ? 'text-amber-400 border-amber-500/40' : 'text-gray-400 border-border'}`}
+              >
+                {tag.name}
+              </span>
+            ))}
+          </div>
+        )}
         {consignee.contact && (
           <div className="flex gap-2 text-xs">
             <span className="text-gray-600 w-16 shrink-0">Contact</span>
@@ -272,9 +284,16 @@ export default function Consignees() {
                     >
                       <td className="px-4 py-3 text-white">
                         {c.name}
-                        {c.is_default_store && (
-                          <span className="ml-2 text-xs text-gray-600 border border-border rounded px-1.5 py-0.5">Store</span>
-                        )}
+                        {c.tags.map(tag => (
+                          <span
+                            key={tag.id}
+                            className={`ml-2 text-xs rounded px-1.5 py-0.5 border ${
+                              tag.is_store ? 'text-amber-400 border-amber-500/40' : 'text-gray-500 border-border'
+                            }`}
+                          >
+                            {tag.name}
+                          </span>
+                        ))}
                       </td>
                       <td className="px-4 py-3 font-mono text-xs text-gray-400">{c.abbreviation}</td>
                       <td className="px-4 py-3 text-xs text-gray-400">{c.contact ?? '—'}</td>
@@ -313,7 +332,12 @@ export default function Consignees() {
         <ConsigneeForm onDone={() => setAdding(false)} />
       </Modal>
       <Modal open={!!editing} onClose={() => setEditing(null)} title="Edit Consignee">
-        {editing && <ConsigneeForm consignee={editing} onDone={() => setEditing(null)} />}
+        {/* Re-resolved against the live list, not the stale click-time
+            snapshot in `editing` — otherwise TagPicker's assign/unassign
+            wouldn't visibly update until the modal was reopened. */}
+        {editing && (
+          <ConsigneeForm consignee={consignees.find(c => c.id === editing.id) ?? editing} onDone={() => setEditing(null)} />
+        )}
       </Modal>
       <Confirm
         open={!!deleting}

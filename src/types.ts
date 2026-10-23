@@ -38,6 +38,12 @@ export interface Brand {
   created_by_consignee: { id: string; name: string } | null
 }
 
+export interface ConsigneeTag {
+  id: string
+  name: string
+  is_store: boolean
+}
+
 export interface Consignee {
   id: string
   name: string
@@ -46,6 +52,7 @@ export interface Consignee {
   contact: string | null
   notes: string | null
   created_at: string
+  tags: ConsigneeTag[]
 }
 
 export interface Item {

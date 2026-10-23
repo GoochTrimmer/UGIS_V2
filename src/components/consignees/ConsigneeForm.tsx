@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { useConsigneeMutations } from '../../hooks/useConsignees'
+import TagPicker from './TagPicker'
 import type { Consignee } from '../../types'
 
 interface ConsigneeFormProps {
@@ -19,12 +20,17 @@ export default function ConsigneeForm({ consignee, onDone }: ConsigneeFormProps)
   const { create, update } = useConsigneeMutations()
   const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<ConsigneeFormValues>()
 
+  // Keyed off the id, not the whole `consignee` object — that reference
+  // changes on every refetch (e.g. after a TagPicker assign/unassign), and
+  // resetting on every one of those would silently wipe an unsaved edit to
+  // name/abbreviation/contact/notes mid-session.
   useEffect(() => {
     reset(consignee
       ? { name: consignee.name, abbreviation: consignee.abbreviation, contact: consignee.contact ?? '', notes: consignee.notes ?? '' }
       : { name: '', abbreviation: '', contact: '', notes: '' }
     )
-  }, [consignee, reset])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consignee?.id, reset])
 
   const onSubmit = async (data: ConsigneeFormValues) => {
     const payload = {
@@ -58,6 +64,12 @@ export default function ConsigneeForm({ consignee, onDone }: ConsigneeFormProps)
         <label className="label">Notes</label>
         <input className="input" {...register('notes')} placeholder="Terms, preferences…" />
       </div>
+      {consignee && (
+        <div>
+          <label className="label">Tags</label>
+          <TagPicker consignee={consignee} />
+        </div>
+      )}
       <div className="flex gap-2 justify-end pt-2">
         <button type="button" className="btn-ghost" onClick={onDone}>Cancel</button>
         <button type="submit" className="btn-primary" disabled={isSubmitting}>
