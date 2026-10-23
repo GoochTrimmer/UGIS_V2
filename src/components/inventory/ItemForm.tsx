@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useItemMutations } from '../../hooks/useItems'
 import { useConsignees } from '../../hooks/useConsignees'
+import { useProfile } from '../../hooks/useProfile'
 import { useBrands } from '../../hooks/useBrands'
 import { useIssueStoreCredit, useLookupShopifyCustomer, useAdjustStoreCredit, useShopifyCustomers } from '../../hooks/useStoreCredit'
 import { invokeEdgeFunction } from '../../lib/edgeFunctions'
@@ -45,6 +46,7 @@ interface ResolvedShopifyProduct {
 
 interface ItemFormValues {
   name: string
+  quantity: string
   size: string
   status: ItemStatus
   season_year: string
@@ -362,7 +364,9 @@ function TradeInCreditManager({ item }: { item: Item }) {
 }
 
 export default function ItemForm({ item, onDone }: ItemFormProps) {
-  const { create, update, markShopifyFinished, unbindShopify, pushShopifyDraft, linkShopifyProduct } = useItemMutations()
+  const { create, createBatch, addUnits, update, markShopifyFinished, unbindShopify, pushShopifyDraft, linkShopifyProduct } = useItemMutations()
+  const { profile, loading: profileLoading } = useProfile()
+  const isConsigneeUser = profileLoading || profile.role === 'consignee' // assume the more restrictive role while unresolved
   const [tab, setTab] = useState<'details' | 'history'>('details')
   const { data: consignees = [] } = useConsignees()
   const { data: allBrands = [] } = useBrands()
@@ -378,12 +382,15 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
   const [reassignResolving, setReassignResolving] = useState(false)
   const [reassignProduct, setReassignProduct] = useState<ResolvedShopifyProduct | null>(null)
   const [reassignVariantId, setReassignVariantId] = useState('')
+  const [addingUnits, setAddingUnits] = useState(false)
+  const [addUnitsQty, setAddUnitsQty] = useState('1')
+  const [addUnitsResult, setAddUnitsResult] = useState<{ ok: boolean; message: string } | null>(null)
 
   void allBrands
 
-  const { register, handleSubmit, watch, reset, setValue, formState: { errors, isSubmitting } } = useForm<ItemFormValues>({
+  const { register, handleSubmit, watch, reset, setValue, getValues, formState: { errors, isSubmitting } } = useForm<ItemFormValues>({
     defaultValues: {
-      name: '', size: '', status: 'in_stock', season_year: '', season_period: 'SS',
+      name: '', quantity: '1', size: '', status: 'in_stock', season_year: '', season_period: 'SS',
       season_custom: '', consignee_id: '', cost_amount: '', takeback_price: '',
       selling_price: '', sold_price: '', sale_channel: '', sale_geography: '',
       payment_type: '', card_fee: '', notes: '',
@@ -403,6 +410,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
   const watchedTradeInCashOffer = watch('trade_in_cash_offer')
   const watchedTradeInCreditOffer = watch('trade_in_credit_offer')
   const watchedReadyToList = watch('ready_to_list')
+  const previewQuantity = Math.max(1, parseInt(watch('quantity')) || 1)
   const sizeReg = register('size')
   const tradeInChoiceField = register('trade_in_choice')
 
@@ -410,10 +418,14 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
     if (item) {
       const itemIsTradeIn = !!item.trade_in_choice || item.trade_in_cash_offer != null || item.trade_in_credit_offer != null
       const itemIsConsigned = !itemIsTradeIn && !!item.consignee && item.consignee.id !== storeConsignee?.id
-      setIsConsigned(itemIsConsigned)
+      // A consignee account only ever reaches items that are already
+      // theirs (RLS-scoped) — always treat those as consignment pieces,
+      // regardless of what the stored trade-in/consignee fields say.
+      setIsConsigned(isConsigneeUser ? true : itemIsConsigned)
       setIsTradeIn(itemIsTradeIn)
       reset({
         name: item.name,
+        quantity: '1',
         size: item.size ?? '',
         status: item.status,
         season_year: item.season_year ? String(item.season_year) : '',
@@ -440,11 +452,11 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       })
       setSelectedBrands(item.brands ?? [])
     } else {
-      setIsConsigned(false)
+      setIsConsigned(isConsigneeUser)
       setIsTradeIn(false)
       reset({
-        name: '', size: '', status: 'in_stock', season_year: '', season_period: 'SS',
-        season_custom: '', consignee_id: storeConsignee?.id ?? '',
+        name: '', quantity: '1', size: '', status: 'in_stock', season_year: '', season_period: 'SS',
+        season_custom: '', consignee_id: isConsigneeUser ? (profile.consignee?.id ?? '') : (storeConsignee?.id ?? ''),
         cost_amount: '', takeback_price: '', selling_price: '', notes: '',
         ready_to_list: false, scheduled_drop_at: '',
         trade_in_cash_offer: '', trade_in_credit_offer: '', trade_in_choice: '',
@@ -456,19 +468,26 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
     setReassignUrl('')
     setReassignProduct(null)
     setReassignVariantId('')
+    setAddingUnits(false)
+    setAddUnitsQty('1')
+    setAddUnitsResult(null)
     setTab('details')
     // storeConsignee intentionally omitted — re-run only when item changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item, reset])
 
-  // When consignees first load for a new item, set the store as the default consignee
+  // When consignees first load for a new item, set the default consignee —
+  // a consignee account always defaults to (and stays locked to) itself;
+  // staff default to the store.
   useEffect(() => {
-    if (!item && storeConsignee && !watchedConsigneeId) {
-      setValue('consignee_id', storeConsignee.id)
+    if (!item && !watchedConsigneeId) {
+      if (isConsigneeUser && profile.consignee) setValue('consignee_id', profile.consignee.id)
+      else if (!isConsigneeUser && storeConsignee) setValue('consignee_id', storeConsignee.id)
     }
-  }, [item, storeConsignee, watchedConsigneeId, setValue])
+  }, [item, storeConsignee, watchedConsigneeId, setValue, isConsigneeUser, profile.consignee])
 
   const handleConsignedToggle = (checked: boolean) => {
+    if (isConsigneeUser) return // locked — always a consignment piece under their own consignee
     setIsConsigned(checked)
     if (checked) {
       setIsTradeIn(false)
@@ -483,6 +502,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
   // consignment rather than a separate flag combination staff could
   // accidentally leave in an inconsistent state.
   const handleTradeInToggle = (checked: boolean) => {
+    if (isConsigneeUser) return // trade-ins are always store-owned, not applicable to consignee accounts
     setIsTradeIn(checked)
     if (checked) {
       setIsConsigned(false)
@@ -500,7 +520,10 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
   // in. A failed Shopify push still leaves ready_to_list set with no
   // product linked, so the existing "Push to Shopify now" retry button
   // surfaces again next time the item's reopened.
-  const onSubmit = (data: ItemFormValues) => {
+  // Shared by onSubmit (create/update this item) and handleAddUnits (clone
+  // the currently-edited values into N new sibling rows) — both need the
+  // exact same field derivation, so it lives once.
+  const buildPayload = (data: ItemFormValues) => {
     const effectiveConsignee = isConsigned
       ? (consignees.find(c => c.id === data.consignee_id) ?? null)
       : storeConsignee
@@ -514,7 +537,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
     const tradeInChoice = isTradeIn && data.trade_in_choice ? data.trade_in_choice : null
     const tradeInCost = tradeInChoice === 'cash' ? tradeInCashOffer : tradeInChoice === 'credit' ? tradeInCreditOffer : null
 
-    const payload = {
+    return {
       name: data.name.trim(),
       size: data.size.trim() || null,
       status: data.status,
@@ -522,7 +545,17 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       season_period: data.season_period || null,
       season_custom: data.season_period === 'Custom' ? data.season_custom.trim() : null,
       consignee_id: effectiveConsignee?.id ?? null,
-      cost_amount: isTradeIn ? tradeInCost : (!isConsigned && data.cost_amount ? parseFloat(data.cost_amount) : null),
+      // Consignee accounts may record their own (optional) cost; staff keep
+      // whatever a consignee entered on a consigned item rather than wiping it
+      // (staff have no cost field of their own for consigned pieces — theirs
+      // is the take-back price).
+      cost_amount: isTradeIn
+        ? tradeInCost
+        : isConsigneeUser
+          ? (data.cost_amount ? parseFloat(data.cost_amount) : null)
+          : isConsigned
+            ? (item?.cost_amount ?? null)
+            : (data.cost_amount ? parseFloat(data.cost_amount) : null),
       takeback_price: isConsigned && data.takeback_price ? parseFloat(data.takeback_price) : null,
       selling_price: data.selling_price ? parseFloat(data.selling_price) : null,
       sold_price: data.status === 'sold' && data.sold_price ? parseFloat(data.sold_price) : null,
@@ -539,8 +572,16 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       brands: selectedBrands,
       consignee: effectiveConsignee,
     }
+  }
 
+  const onSubmit = (data: ItemFormValues) => {
+    const payload = buildPayload(data)
     const shouldPushDraft = data.ready_to_list && !item?.shopify_product_id
+    // Only meaningful on a brand-new item — "add 6 of the same ring" rather
+    // than true variants, see createBatch in useItems.ts. Clamped here
+    // (rather than relying on the input's min) since a cleared/invalid
+    // field would otherwise produce NaN.
+    const quantity = !item ? Math.max(1, parseInt(data.quantity) || 1) : 1
 
     onDone()
 
@@ -550,6 +591,12 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
         if (item) {
           await update.mutateAsync({ id: item.id, readable_id: item.readable_id, ...payload })
           targetId = item.id
+        } else if (quantity > 1) {
+          const createdRows = await createBatch.mutateAsync({ ...payload, quantity })
+          // If this batch is pushed to Shopify, it's pushed as one listing
+          // (see shopify-create-draft) — any one unit's id works to drive
+          // that, so the first is as good as any.
+          targetId = createdRows[0].id
         } else {
           const created = await create.mutateAsync(payload)
           targetId = (created as { id: string }).id
@@ -559,6 +606,30 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
         console.error('[ItemForm] save failed', err)
       }
     })()
+  }
+
+  // Clones this item's current (saved + any unsaved edits in the form
+  // right now) values into N new sibling rows, joining them into its
+  // batch — a restock, not a new submit of this item. Doesn't close the
+  // modal, so staff can keep editing or add more again.
+  const handleAddUnits = async () => {
+    if (!item) return
+    const quantity = Math.max(1, parseInt(addUnitsQty) || 1)
+    setAddUnitsResult(null)
+    try {
+      const payload = buildPayload(getValues())
+      const createdRows = await addUnits.mutateAsync({
+        ...payload,
+        sourceItemId: item.id,
+        sourceBatchId: item.batch_id,
+        quantity,
+      })
+      setAddUnitsResult({ ok: true, message: `Added ${createdRows.length} more — ${createdRows.map(r => r.readable_id).join(', ')}` })
+      setAddingUnits(false)
+      setAddUnitsQty('1')
+    } catch (err) {
+      setAddUnitsResult({ ok: false, message: err instanceof Error ? err.message : 'Failed to add units' })
+    }
   }
 
   const pushToShopify = async (itemId: string): Promise<boolean> => {
@@ -633,9 +704,10 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
   // Trade-in credit itself is issued/adjusted only from the History tab
   // now, deliberately — never as a side effect of a Details-tab save.
   const willPushToShopify = watchedReadyToList && !item?.shopify_product_id
+  const addLabel = previewQuantity > 1 ? `Add ${previewQuantity} Items` : 'Add Item'
   const submitLabel = !willPushToShopify
-    ? (item ? 'Save Changes' : 'Add Item')
-    : `${item ? 'Save' : 'Add'} & Publish to Shopify`
+    ? (item ? 'Save Changes' : addLabel)
+    : `${item ? 'Save' : addLabel} & Publish to Shopify`
 
   // No tabs for a brand-new item — there's no history or sale to show yet,
   // so it just always renders the Details content below.
@@ -747,8 +819,8 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
 
       {showDetails && (
       <>
-      {/* Name + Size */}
-      <div className="grid grid-cols-3 gap-2">
+      {/* Name + Size (+ Quantity, new items only) */}
+      <div className={`grid gap-2 ${item ? 'grid-cols-3' : 'grid-cols-4'}`}>
         <div className="col-span-2">
           <label className="label">Item Name *</label>
           <input className="input" {...register('name', { required: true })} placeholder="e.g. Undercover AW02 Witch's Cell Division Jacket" />
@@ -766,7 +838,52 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
             placeholder="M, XL, 38…"
           />
         </div>
+        {!item && (
+          <div>
+            <label className="label">Qty <span className="text-gray-600 font-normal">(identical units)</span></label>
+            <input className="input font-mono" type="number" min={1} step={1} {...register('quantity')} placeholder="1" />
+          </div>
+        )}
       </div>
+
+      {/* Add more units — restock an existing item, cloning its current
+          values (including any unsaved edits above) into N new sibling
+          rows rather than requiring a brand-new Add Item for each one. */}
+      {item && (
+        <div className="border border-border rounded-lg px-3 py-2.5">
+          {!addingUnits ? (
+            <button type="button" className="text-xs text-gray-400 hover:text-white transition-colors" onClick={() => { setAddingUnits(true); setAddUnitsResult(null) }}>
+              + Add more units of this item
+            </button>
+          ) : (
+            <div className="flex items-end gap-2 flex-wrap">
+              <div>
+                <label className="label">How many more?</label>
+                <input
+                  className="input font-mono w-24 h-8 py-0"
+                  type="number" min={1} step={1}
+                  value={addUnitsQty}
+                  onChange={e => setAddUnitsQty(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <button
+                type="button"
+                className="btn-primary py-1 px-2 text-xs"
+                disabled={addUnits.isPending}
+                onClick={() => void handleAddUnits()}
+              >
+                {addUnits.isPending ? 'Adding…' : 'Add'}
+              </button>
+              <button type="button" className="btn-ghost py-1 px-2 text-xs" onClick={() => setAddingUnits(false)}>Cancel</button>
+              <p className="text-xs text-gray-600 w-full">Uses this item's current values above — brand, price, consignee, etc.</p>
+            </div>
+          )}
+          {addUnitsResult && (
+            <p className={`text-xs mt-1.5 ${addUnitsResult.ok ? 'text-emerald-400' : 'text-red-400'}`}>{addUnitsResult.message}</p>
+          )}
+        </div>
+      )}
 
       {/* Brands */}
       <div>
@@ -814,35 +931,41 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
         </select>
       </div>
 
-      {/* Consignment toggle */}
-      <div className="flex items-center gap-3 py-1">
-        <input
-          id="is-consigned"
-          type="checkbox"
-          className="w-4 h-4 rounded border-border bg-surface-2 accent-white cursor-pointer"
-          checked={isConsigned}
-          onChange={e => handleConsignedToggle(e.target.checked)}
-        />
-        <label htmlFor="is-consigned" className="text-sm text-gray-300 cursor-pointer select-none">
-          Consignment piece
-          <span className="text-gray-600 font-normal ml-1">(on behalf of a consignee)</span>
-        </label>
-      </div>
+      {/* Consignment toggle — locked on for consignee accounts, who only
+          ever manage their own consignment pieces */}
+      {!isConsigneeUser && (
+        <div className="flex items-center gap-3 py-1">
+          <input
+            id="is-consigned"
+            type="checkbox"
+            className="w-4 h-4 rounded border-border bg-surface-2 accent-white cursor-pointer"
+            checked={isConsigned}
+            onChange={e => handleConsignedToggle(e.target.checked)}
+          />
+          <label htmlFor="is-consigned" className="text-sm text-gray-300 cursor-pointer select-none">
+            Consignment piece
+            <span className="text-gray-600 font-normal ml-1">(on behalf of a consignee)</span>
+          </label>
+        </div>
+      )}
 
-      {/* Trade-in toggle */}
-      <div className="flex items-center gap-3 py-1">
-        <input
-          id="is-trade-in"
-          type="checkbox"
-          className="w-4 h-4 rounded border-border bg-surface-2 accent-white cursor-pointer"
-          checked={isTradeIn}
-          onChange={e => handleTradeInToggle(e.target.checked)}
-        />
-        <label htmlFor="is-trade-in" className="text-sm text-gray-300 cursor-pointer select-none">
-          Trade-in item
-          <span className="text-gray-600 font-normal ml-1">(customer traded this in for cash or store credit — always store-owned)</span>
-        </label>
-      </div>
+      {/* Trade-in toggle — not applicable to consignee accounts (trade-ins
+          are always store-owned) */}
+      {!isConsigneeUser && (
+        <div className="flex items-center gap-3 py-1">
+          <input
+            id="is-trade-in"
+            type="checkbox"
+            className="w-4 h-4 rounded border-border bg-surface-2 accent-white cursor-pointer"
+            checked={isTradeIn}
+            onChange={e => handleTradeInToggle(e.target.checked)}
+          />
+          <label htmlFor="is-trade-in" className="text-sm text-gray-300 cursor-pointer select-none">
+            Trade-in item
+            <span className="text-gray-600 font-normal ml-1">(customer traded this in for cash or store credit — always store-owned)</span>
+          </label>
+        </div>
+      )}
 
       {/* Trade-in appraisal — cash/credit offer, customer's choice, and
           (once credit is chosen) issuing the actual Shopify store credit. */}
@@ -902,8 +1025,10 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
         </div>
       )}
 
-      {/* Consignee selector — only when consigned */}
-      {isConsigned && (
+      {/* Consignee selector — staff only. A consignee account's items always
+          belong to its own consignee (set automatically on create, enforced
+          by RLS), so there's nothing for them to choose or see here. */}
+      {isConsigned && !isConsigneeUser && (
         <div>
           <div className="flex items-center justify-between mb-1">
             <label className="label mb-0">Consignee *</label>
@@ -923,15 +1048,28 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
 
       {/* Pricing — context-aware */}
       {isConsigned ? (
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="label">Take-back Price</label>
-            <input className="input" type="number" step="0.01" {...register('takeback_price')} placeholder="0.00" />
+        <div className="space-y-2">
+          <div className={`grid gap-2 ${isConsigneeUser ? 'grid-cols-3' : 'grid-cols-2'}`}>
+            {isConsigneeUser && (
+              <div>
+                <label className="label">Cost <span className="text-gray-600 font-normal">(optional)</span></label>
+                <input className="input" type="number" step="0.01" {...register('cost_amount')} placeholder="0.00" />
+              </div>
+            )}
+            <div>
+              <label className="label">Take-back Price</label>
+              <input className="input" type="number" step="0.01" {...register('takeback_price')} placeholder="0.00" />
+            </div>
+            <div>
+              <label className="label">Selling Price</label>
+              <input className="input" type="number" step="0.01" {...register('selling_price')} placeholder="0.00" />
+            </div>
           </div>
-          <div>
-            <label className="label">Selling Price</label>
-            <input className="input" type="number" step="0.01" {...register('selling_price')} placeholder="0.00" />
-          </div>
+          {!isConsigneeUser && item?.cost_amount != null && (
+            <p className="text-xs text-gray-500">
+              Consignee's recorded cost: <span className="text-gray-300">${Number(item.cost_amount).toFixed(2)}</span>
+            </p>
+          )}
         </div>
       ) : isTradeIn ? (
         <div className="grid grid-cols-2 gap-2">
@@ -963,7 +1101,9 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
 
       {saleDetailsSection}
 
-      {/* Shopify listing */}
+      {/* Shopify listing — Shopify is Upstairs Garments-only, not exposed
+          to consignee accounts at all */}
+      {!isConsigneeUser && (
       <div className="border border-border rounded-lg px-3 py-3 space-y-3 bg-surface-2/40">
         <p className="text-xs font-medium text-white">Shopify Listing</p>
 
@@ -1108,6 +1248,7 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
           <p className="text-xs text-red-400 bg-red-900/20 border border-red-900/40 rounded px-2 py-1.5">{shopifyError}</p>
         )}
       </div>
+      )}
 
       {/* Notes */}
       <div>
@@ -1118,11 +1259,11 @@ export default function ItemForm({ item, onDone }: ItemFormProps) {
       {/* ID preview */}
       {selectedBrands.length > 0 && !item && (
         <div className="text-xs text-gray-500 bg-surface-2 border border-border rounded px-3 py-2">
-          <span className="text-gray-600">ID preview: </span>
+          <span className="text-gray-600">{previewQuantity > 1 ? `ID preview (×${previewQuantity}): ` : 'ID preview: '}</span>
           <span className="font-mono text-gray-300">
             {selectedBrands.map(b => b.abbreviation).join('-')}
             {previewConsigneeAbbr ? `-${previewConsigneeAbbr}` : ''}
-            -NN
+            -NN{previewQuantity > 1 ? ' … -NN' : ''}
           </span>
         </div>
       )}

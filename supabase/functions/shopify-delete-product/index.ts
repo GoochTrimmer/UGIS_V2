@@ -5,6 +5,7 @@
 //     about to remove before confirming.
 //   { action: 'delete', productId }  -> actually deletes the product.
 import { corsPreflight, jsonResponse } from '../_shared/cors.ts'
+import { requireStaff } from '../_shared/requireStaff.ts'
 import { shopifyGraphql, productGid, getProductStatus } from '../_shared/shopify.ts'
 
 interface RequestBody {
@@ -41,6 +42,9 @@ async function remove(productId: string) {
 Deno.serve(async req => {
   const preflight = corsPreflight(req)
   if (preflight) return preflight
+
+  const denied = await requireStaff(req)
+  if (denied) return denied
 
   try {
     const { productId, action } = (await req.json()) as RequestBody

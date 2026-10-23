@@ -7,8 +7,11 @@ import { useBrands } from '../hooks/useBrands'
 import { useConsignees } from '../hooks/useConsignees'
 import { useItems } from '../hooks/useItems'
 import { useAuth } from '../hooks/useAuth'
+import { useProfile } from '../hooks/useProfile'
+import { usePendingBrandRequests, createBrandRequests } from '../hooks/useBrandRequests'
 import { supabase } from '../lib/supabase'
 import { generateAbbreviation, parseSeason, normalizeStatus, guessColumnMapping } from '../lib/importUtils'
+import { findMatchingBrand, normalizeBrandKey, suggestBrand } from '../lib/brandMatch'
 import { formatSeason } from '../lib/idGenerator'
 import { SALE_CHANNEL_CONFIG, SALE_GEOGRAPHY_CONFIG } from '../lib/constants'
 import { writeItemLog } from '../lib/itemLog'
@@ -241,6 +244,11 @@ function parseRows(
     .filter(r => r.name || r.brandNames.length > 0 || r.readableId)
 }
 
+// Sentinel values for a flagged (possible-typo) brand's dropdown, alongside
+// real brand ids.
+const BRAND_SKIP = '__skip__'
+const BRAND_CREATE = '__create__'
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Import() {
@@ -248,6 +256,8 @@ export default function Import() {
   const { data: existingConsignees = [] } = useConsignees()
   const { data: allItems } = useItems()
   const { session } = useAuth()
+  const { profile, loading: profileLoading } = useProfile()
+  const isConsigneeUser = profileLoading || profile.role === 'consignee' // assume the more restrictive role while unresolved
   const qc = useQueryClient()
 
   const [step, setStep] = useState<Step>('upload')
@@ -256,6 +266,10 @@ export default function Import() {
   const [rawRows, setRawRows] = useState<string[][]>([])
   const [mapping, setMapping] = useState<Record<string, string>>({})
   const [brandAbbrs, setBrandAbbrs] = useState<Record<string, string>>({})
+  // normalized sheet brand name -> chosen existing brand id, BRAND_SKIP or BRAND_CREATE
+  const [brandChoices, setBrandChoices] = useState<Record<string, string>>({})
+  const [requestedBrandCount, setRequestedBrandCount] = useState(0)
+  const { data: pendingBrandRequests = [] } = usePendingBrandRequests()
   const [consigneeAbbrs, setConsigneeAbbrs] = useState<Record<string, string>>({})
   const [progress, setProgress] = useState({ current: 0, total: 0, label: '' })
   const [importErrors, setImportErrors] = useState<string[]>([])
@@ -297,24 +311,69 @@ export default function Import() {
     [parsedRows, readableIdMap],
   )
 
-  const existingBrandNameSet = useMemo(
-    () => new Set(existingBrands.map(b => b.name.toLowerCase())),
-    [existingBrands],
-  )
   const existingConsigneeNameSet = useMemo(
     () => new Set(existingConsignees.map(c => c.name.toLowerCase())),
     [existingConsignees],
   )
 
-  const detectedNewBrandNames = useMemo(() => {
-    const all = new Set(createRows.flatMap(r => r.brandNames))
-    return [...all].filter(n => !existingBrandNameSet.has(n.toLowerCase()))
-  }, [createRows, existingBrandNameSet])
+  // Matches by name, abbreviation, OR alias under normalized (diacritic-
+  // and punctuation-insensitive) comparison — "Comme des Garcons" resolves
+  // to the existing "Comme des Garçons" entry instead of being proposed as
+  // a brand-new (duplicate) brand. See src/lib/brandMatch.ts.
+  // Sheet brand names with no exact (normalized) match to an existing brand,
+  // deduped by normalized key so "Nike" / "NIKE" / "nike " in one sheet are
+  // ONE entry rather than three.
+  const unmatchedBrands = useMemo(() => {
+    const byKey = new Map<string, string>()
+    for (const n of createRows.flatMap(r => r.brandNames)) {
+      const key = normalizeBrandKey(n)
+      if (key && !byKey.has(key)) byKey.set(key, n)
+    }
+    return [...byKey.values()].filter(n => !findMatchingBrand(n, existingBrands))
+  }, [createRows, existingBrands])
 
+  // Unmatched names that are suspiciously close to an existing brand — most
+  // likely typos. These are never silently created as new brands: the user
+  // must pick the right existing brand, or leave it undefined and file a
+  // request for staff to add/correct it.
+  const brandSuggestions = useMemo(() => {
+    const m = new Map<string, Brand>()
+    for (const n of unmatchedBrands) {
+      const sug = suggestBrand(n, existingBrands)
+      if (sug) m.set(n, sug)
+    }
+    return m
+  }, [unmatchedBrands, existingBrands])
+
+  const flaggedBrandNames = useMemo(
+    () => unmatchedBrands.filter(n => brandSuggestions.has(n)),
+    [unmatchedBrands, brandSuggestions],
+  )
+  const unresolvedFlaggedCount = flaggedBrandNames.filter(n => !brandChoices[normalizeBrandKey(n)]).length
+
+  // Brands that will actually be created: names with no near-match, plus
+  // flagged names the user explicitly chose to create as new.
+  const detectedNewBrandNames = useMemo(
+    () => unmatchedBrands.filter(n => !brandSuggestions.has(n) || brandChoices[normalizeBrandKey(n)] === BRAND_CREATE),
+    [unmatchedBrands, brandSuggestions, brandChoices],
+  )
+
+  const brandRowCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const r of createRows) {
+      for (const key of new Set(r.brandNames.map(normalizeBrandKey))) m.set(key, (m.get(key) ?? 0) + 1)
+    }
+    return m
+  }, [createRows])
+
+  // Consignee accounts always import into their own consignee — the
+  // sheet's Consignee column (if mapped) is ignored, so there's never a
+  // "new consignee" to create on their behalf.
   const detectedNewConsigneeNames = useMemo(() => {
+    if (isConsigneeUser) return []
     const all = new Set(createRows.map(r => r.consigneeName).filter(Boolean) as string[])
     return [...all].filter(n => !existingConsigneeNameSet.has(n.toLowerCase()))
-  }, [createRows, existingConsigneeNameSet])
+  }, [createRows, existingConsigneeNameSet, isConsigneeUser])
 
   useEffect(() => {
     setBrandAbbrs(prev => {
@@ -342,12 +401,16 @@ export default function Import() {
     const conflicts = new Set<string>()
     const existingAbbrs = new Set(existingBrands.map(b => b.abbreviation))
     const seen = new Set<string>()
-    for (const [name, abbr] of Object.entries(brandAbbrs)) {
+    // Only brands still pending creation — a stale entry for a name the
+    // user has since mapped to an existing brand must not block the import.
+    for (const name of detectedNewBrandNames) {
+      const abbr = brandAbbrs[name]
+      if (abbr === undefined) continue
       if (existingAbbrs.has(abbr) || seen.has(abbr)) conflicts.add(name)
       else seen.add(abbr)
     }
     return conflicts
-  }, [brandAbbrs, existingBrands])
+  }, [brandAbbrs, existingBrands, detectedNewBrandNames])
 
   const consigneeAbbrConflicts = useMemo(() => {
     const conflicts = new Set<string>()
@@ -367,8 +430,18 @@ export default function Import() {
     const data = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' }) as string[][]
     const filtered = data.filter(row => row.some(cell => (cell as string).trim() !== ''))
     setRawRows(filtered)
-    setMapping(guessColumnMapping(filtered[0] ?? []))
-  }, [])
+    setBrandChoices({})
+    const guessed = guessColumnMapping(filtered[0] ?? [])
+    // Consignee accounts don't get a "Consignee" mapping option (their
+    // sheet always imports into their own consignee) — drop it even if
+    // auto-detected, so the dropdown doesn't show a stray unselectable value.
+    if (isConsigneeUser) {
+      for (const key of Object.keys(guessed)) {
+        if (guessed[key] === 'consignee') guessed[key] = ''
+      }
+    }
+    setMapping(guessed)
+  }, [isConsigneeUser])
 
   const handleFile = useCallback(async (file: File) => {
     if (!file.name.match(/\.(xlsx|xls)$/i)) return
@@ -390,7 +463,7 @@ export default function Import() {
   // ─── Import ───────────────────────────────────────────────────────────────────
 
   const handleImport = async () => {
-    if (abbrConflicts.size > 0 || consigneeAbbrConflicts.size > 0) return
+    if (abbrConflicts.size > 0 || consigneeAbbrConflicts.size > 0 || unresolvedFlaggedCount > 0) return
 
     setStep('importing')
     setImportErrors([])
@@ -399,8 +472,19 @@ export default function Import() {
     setProgress({ current: 0, total, label: '' })
 
     // ── A. Resolve / create brands & consignees for new items ─────────────────
-    const brandMap = new Map<string, Brand>()
-    for (const b of existingBrands) brandMap.set(b.name.toLowerCase(), b)
+    // Grows as new brands get created below, so a second sheet row with the
+    // same "new" brand name resolves to the one just created instead of
+    // creating a duplicate.
+    const knownBrands: Brand[] = [...existingBrands]
+    const resolveBrand = (name: string): Brand | null | undefined => {
+      const choice = brandChoices[normalizeBrandKey(name)]
+      if (choice === BRAND_SKIP) return null
+      if (choice && choice !== BRAND_CREATE) {
+        const chosen = knownBrands.find(b => b.id === choice)
+        if (chosen) return chosen
+      }
+      return findMatchingBrand(name, knownBrands)
+    }
 
     for (const name of detectedNewBrandNames) {
       const abbr = brandAbbrs[name]
@@ -409,20 +493,22 @@ export default function Import() {
         .insert({ name, abbreviation: abbr, aliases: [], parent_id: null })
         .select().single()
       if (error) { errors.push(`Brand "${name}": ${error.message}`); continue }
-      brandMap.set(name.toLowerCase(), data as Brand)
+      knownBrands.push(data as Brand)
     }
 
     const consigneeMap = new Map<string, Consignee>()
     for (const c of existingConsignees) consigneeMap.set(c.name.toLowerCase(), c)
 
-    for (const name of detectedNewConsigneeNames) {
-      const abbr = consigneeAbbrs[name]
-      if (!abbr) { errors.push(`No abbreviation for consignee "${name}"`); continue }
-      const { data, error } = await supabase.from('consignees')
-        .insert({ name, abbreviation: abbr, notes: null })
-        .select().single()
-      if (error) { errors.push(`Consignee "${name}": ${error.message}`); continue }
-      consigneeMap.set(name.toLowerCase(), data as Consignee)
+    if (!isConsigneeUser) {
+      for (const name of detectedNewConsigneeNames) {
+        const abbr = consigneeAbbrs[name]
+        if (!abbr) { errors.push(`No abbreviation for consignee "${name}"`); continue }
+        const { data, error } = await supabase.from('consignees')
+          .insert({ name, abbreviation: abbr, notes: null })
+          .select().single()
+        if (error) { errors.push(`Consignee "${name}": ${error.message}`); continue }
+        consigneeMap.set(name.toLowerCase(), data as Consignee)
+      }
     }
 
     // ── B. Process UPDATE rows ────────────────────────────────────────────────
@@ -483,6 +569,12 @@ export default function Import() {
     setProgress(p => ({ ...p, label: 'Creating new items…' }))
 
     const storeConsignee = existingConsignees.find(c => c.is_default_store) ?? null
+    // A consignee account's own row, forced onto every created item — the
+    // sheet's Consignee column is ignored for them (RLS would reject
+    // anything else anyway).
+    const ownConsignee = isConsigneeUser
+      ? (existingConsignees.find(c => c.id === profile.consignee?.id) ?? null)
+      : null
 
     interface PreparedRow {
       name: string; size: string | null; status: ItemStatus
@@ -496,11 +588,13 @@ export default function Import() {
     const prepared: PreparedRow[] = []
     for (const row of createRows) {
       const brands = row.brandNames
-        .map(n => brandMap.get(n.toLowerCase()))
-        .filter((b): b is Brand => b !== undefined)
-      const consignee = row.consigneeName
-        ? (consigneeMap.get(row.consigneeName.toLowerCase()) ?? storeConsignee)
-        : storeConsignee
+        .map(n => resolveBrand(n))
+        .filter((b): b is Brand => b !== undefined && b !== null)
+      const consignee = isConsigneeUser
+        ? ownConsignee
+        : row.consigneeName
+          ? (consigneeMap.get(row.consigneeName.toLowerCase()) ?? storeConsignee)
+          : storeConsignee
       prepared.push({
         name: row.name, size: row.size, status: row.status,
         season_year: row.season.year, season_period: row.season.period, season_custom: row.season.custom,
@@ -598,6 +692,24 @@ export default function Import() {
       })
     }
 
+    // File a request for every flagged brand left undefined, so staff can
+    // add/correct it and assign it to the affected items afterwards.
+    const alreadyRequested = new Set(pendingBrandRequests.map(r => normalizeBrandKey(r.name)))
+    const requests: { name: string; item_count: number; example_item: string | null }[] = []
+    for (const name of flaggedBrandNames) {
+      const key = normalizeBrandKey(name)
+      if (brandChoices[key] !== BRAND_SKIP || alreadyRequested.has(key)) continue
+      const affected = createRows.filter(r => r.brandNames.some(b => normalizeBrandKey(b) === key))
+      requests.push({ name, item_count: affected.length, example_item: affected[0]?.name ?? null })
+    }
+    try {
+      await createBrandRequests(requests)
+      await qc.invalidateQueries({ queryKey: ['brand_requests'] })
+    } catch (err) {
+      errors.push(`Brand request: ${err instanceof Error ? err.message : 'failed to file'}`)
+    }
+    setRequestedBrandCount(requests.length)
+
     if (updated > 0 || imported > 0) {
       await qc.invalidateQueries({ queryKey: ['items'] })
       await qc.invalidateQueries({ queryKey: ['item_logs'] })
@@ -686,7 +798,9 @@ export default function Import() {
                       value={mapping[header] ?? ''}
                       onChange={e => setMapping(prev => ({ ...prev, [header]: e.target.value }))}
                     >
-                      {UGIS_FIELDS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+                      {UGIS_FIELDS
+                        .filter(f => !isConsigneeUser || f.value !== 'consignee')
+                        .map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
                     </select>
                   </div>
                 ))}
@@ -706,6 +820,85 @@ export default function Import() {
                 <span className="text-red-400"><span className="font-medium">{skippedRows}</span> skipped (missing name)</span>
               )}
             </div>
+
+            {/* Possible typos — must be resolved before importing */}
+            {flaggedBrandNames.length > 0 && (
+              <div className="border border-amber-500/40 bg-amber-500/5 rounded-lg overflow-hidden">
+                <div className="px-4 py-3 border-b border-amber-500/20">
+                  <h2 className="text-sm font-medium text-amber-400">
+                    Possible brand typos <span className="font-normal">({unresolvedFlaggedCount} of {flaggedBrandNames.length} need a decision)</span>
+                  </h2>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    These brand names aren't in your brand list but look very close to one that is. Pick the right brand, or leave it undefined for now — the items import without a brand and a request is sent to add it.
+                  </p>
+                </div>
+                <div className="divide-y divide-border">
+                  {flaggedBrandNames.map(name => {
+                    const key = normalizeBrandKey(name)
+                    const sug = brandSuggestions.get(name)!
+                    const choice = brandChoices[key] ?? ''
+                    const rows = brandRowCounts.get(key) ?? 0
+                    const usingSuggestion = choice === sug.id
+                    const chosenBrand = choice && choice !== BRAND_SKIP && choice !== BRAND_CREATE
+                      ? existingBrands.find(b => b.id === choice)
+                      : undefined
+                    const summary = !choice ? null
+                      : choice === BRAND_SKIP ? 'Left undefined — request will be sent'
+                      : choice === BRAND_CREATE ? 'Will be created as a new brand'
+                      : `Using “${chosenBrand?.name ?? '…'}”`
+                    const setChoice = (value: string) => setBrandChoices(prev => ({ ...prev, [key]: value }))
+                    return (
+                      <div
+                        key={key}
+                        className={`px-4 py-3 space-y-2 border-l-4 ${choice ? 'border-emerald-500/70' : 'border-amber-500'}`}
+                      >
+                        <div className="flex items-baseline justify-between gap-3 flex-wrap">
+                          <p className="text-sm font-semibold text-white">
+                            “{name}”
+                            <span className="ml-2 text-xs font-normal text-gray-600">{rows} row{rows === 1 ? '' : 's'}</span>
+                          </p>
+                          {summary ? (
+                            <span className="text-xs font-medium text-emerald-400">✓ {summary}</span>
+                          ) : (
+                            <span className="text-xs font-medium text-amber-400">Needs a decision</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => setChoice(sug.id)}
+                            className={`text-sm font-semibold rounded px-3 py-1.5 transition-colors ${
+                              usingSuggestion
+                                ? 'bg-emerald-500 text-black'
+                                : 'bg-amber-400 text-black hover:bg-amber-300'
+                            }`}
+                          >
+                            {usingSuggestion ? '✓ ' : ''}Did you mean “{sug.name}”?
+                          </button>
+                          <span className="text-xs text-gray-600">or</span>
+                          <select
+                            className="input text-xs h-8 py-0 w-full sm:w-72"
+                            value={usingSuggestion ? '' : choice}
+                            onChange={e => e.target.value && setChoice(e.target.value)}
+                          >
+                            <option value="">Something else…</option>
+                            <option value={BRAND_SKIP}>Leave undefined for now — request to add</option>
+                            {!isConsigneeUser && <option value={BRAND_CREATE}>Create as a new brand</option>}
+                            <optgroup label="Pick from existing brands">
+                              {existingBrands.map(b => (
+                                <option key={b.id} value={b.id}>
+                                  {b.id === sug.id ? `★ ${b.name} — closest match` : b.name}
+                                </option>
+                              ))}
+                            </optgroup>
+                          </select>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* New brands */}
             {detectedNewBrandNames.length > 0 && (
@@ -836,11 +1029,17 @@ export default function Import() {
               </div>
             )}
 
+            {unresolvedFlaggedCount > 0 && (
+              <p className="text-xs text-amber-400 text-right">
+                Decide on {unresolvedFlaggedCount} possible brand typo{unresolvedFlaggedCount === 1 ? '' : 's'} above to continue.
+              </p>
+            )}
+
             <div className="flex gap-3 justify-between">
               <button className="btn-ghost" onClick={() => { setStep('upload'); setRawRows([]) }}>← Back</button>
               <button
                 className="btn-primary"
-                disabled={totalActionable === 0 || abbrConflicts.size > 0 || consigneeAbbrConflicts.size > 0}
+                disabled={totalActionable === 0 || abbrConflicts.size > 0 || consigneeAbbrConflicts.size > 0 || unresolvedFlaggedCount > 0}
                 onClick={() => void handleImport()}
               >
                 {createRows.length > 0 && updateRows.length > 0
@@ -876,6 +1075,7 @@ export default function Import() {
             <div className="flex justify-center gap-6 text-xs text-gray-500">
               {importCount > 0 && <span><span className="text-emerald-400 font-medium">{importCount}</span> created</span>}
               {updateCount > 0 && <span><span className="text-blue-400 font-medium">{updateCount}</span> updated</span>}
+              {requestedBrandCount > 0 && <span><span className="text-amber-400 font-medium">{requestedBrandCount}</span> brand request{requestedBrandCount === 1 ? '' : 's'} sent</span>}
               {importErrors.length > 0 && <span className="text-red-400">{importErrors.length} failed</span>}
             </div>
             {importErrors.length > 0 && (
@@ -908,8 +1108,10 @@ export default function Import() {
           </div>
         )}
 
-        {/* ── Danger Zone ──────────────────────────────────────────── */}
-        {step !== 'importing' && (
+        {/* ── Danger Zone — staff only; a consignee account's RLS scope
+            would limit the actual damage to their own rows, but this
+            action has no place in their UI regardless. ──────────────── */}
+        {step !== 'importing' && !isConsigneeUser && (
           <div className="mt-12 border-t border-red-900/30 pt-6">
             <p className="text-xs font-medium text-red-500 mb-1">Danger Zone</p>
             <p className="text-xs text-gray-600 mb-3">

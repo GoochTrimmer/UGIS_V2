@@ -16,6 +16,7 @@
 // writes a reconciliation_runs row so the frontend can show a "check is
 // running" indicator and a last-run summary.
 import { corsPreflight, jsonResponse } from '../_shared/cors.ts'
+import { requireStaff } from '../_shared/requireStaff.ts'
 import { shopifyGraphql, gidToId, customerGid } from '../_shared/shopify.ts'
 import { getPrimaryLocationId } from '../_shared/inventory.ts'
 import { supabaseAdmin } from '../_shared/supabaseAdmin.ts'
@@ -106,6 +107,9 @@ async function fetchVariantDataById(): Promise<Map<string, VariantData>> {
 Deno.serve(async req => {
   const preflight = corsPreflight(req)
   if (preflight) return preflight
+
+  const denied = await requireStaff(req)
+  if (denied) return denied
 
   const db = supabaseAdmin()
 

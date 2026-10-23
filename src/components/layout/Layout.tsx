@@ -1,9 +1,12 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
+import { useProfile } from '../../hooks/useProfile'
 import { useLatestReconciliationRun, useOpenDiscrepancies } from '../../hooks/useReconciliation'
 import Spinner from '../ui/Spinner'
 import logo from '../../assets/upstairs-garments-logo-trans-03032024.png'
+
+const STAFF_ONLY_ROUTES = new Set(['/consignees', '/shopify'])
 
 const nav = [
   { to: '/',            label: 'Inventory',  icon: '▦' },
@@ -22,11 +25,18 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   const { signOut, session } = useAuth()
+  const { profile, loading: profileLoading } = useProfile()
   const navigate = useNavigate()
   const { data: latestRun } = useLatestReconciliationRun()
   const { data: openDiscrepancies } = useOpenDiscrepancies()
   const openCount = openDiscrepancies?.length ?? 0
   const [menuOpen, setMenuOpen] = useState(false)
+  // While the role is still resolving, default to the restricted set
+  // rather than the full staff nav — showing every tab first and then
+  // narrowing down is what caused staff-only tabs to flash visible for a
+  // consignee account.
+  const isStaff = !profileLoading && profile.role === 'staff'
+  const visibleNav = nav.filter(item => isStaff || !STAFF_ONLY_ROUTES.has(item.to))
 
   const handleSignOut = async () => {
     await signOut()
@@ -41,7 +51,9 @@ export default function Layout({ children }: LayoutProps) {
         <div className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2">
             <img src={logo} alt="Upstairs Garments" className="h-5 w-auto" />
-            <span className="text-xs font-mono font-medium tracking-widest text-gray-400">UGIS</span>
+            <span className="text-xs font-mono font-medium tracking-widest text-gray-400">
+              {profile.role === 'consignee' ? profile.consignee?.name : 'UGIS'}
+            </span>
           </div>
           <button
             type="button"
@@ -62,7 +74,7 @@ export default function Layout({ children }: LayoutProps) {
             <div className="fixed inset-0 z-30 bg-black/50" onClick={() => setMenuOpen(false)} />
             <nav className="absolute top-full left-0 right-0 z-40 bg-surface-1 border-b border-border shadow-lg max-h-[calc(100vh-3.25rem)] overflow-y-auto">
               <div className="px-2 py-2 space-y-0.5">
-                {nav.map(({ to, label, icon }) => (
+                {visibleNav.map(({ to, label, icon }) => (
                   <NavLink
                     key={to}
                     to={to}
@@ -115,10 +127,12 @@ export default function Layout({ children }: LayoutProps) {
         <aside className="hidden md:flex flex-col w-52 bg-surface-1 border-r border-border shrink-0">
           <div className="px-5 py-4 border-b border-border flex items-center gap-3">
             <img src={logo} alt="Upstairs Garments" className="h-9 w-auto" />
-            <span className="text-xs font-mono font-medium tracking-widest text-gray-500 uppercase">UGIS</span>
+            <span className="text-xs font-mono font-medium tracking-widest text-gray-500 uppercase">
+              {profile.role === 'consignee' ? profile.consignee?.name : 'UGIS'}
+            </span>
           </div>
           <nav className="flex-1 px-2 py-3 space-y-0.5">
-            {nav.map(({ to, label, icon }) => (
+            {visibleNav.map(({ to, label, icon }) => (
               <NavLink
                 key={to}
                 to={to}

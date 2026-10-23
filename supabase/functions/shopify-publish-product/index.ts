@@ -6,6 +6,7 @@
 // that gap: shopify_needs_finishing only gets cleared once this call
 // actually succeeds (see the markShopifyFinished mutation in useItems.ts).
 import { corsPreflight, jsonResponse } from '../_shared/cors.ts'
+import { requireStaff } from '../_shared/requireStaff.ts'
 import { shopifyGraphql, productGid } from '../_shared/shopify.ts'
 
 interface RequestBody {
@@ -30,6 +31,9 @@ const PRODUCT_PUBLISH = `
 Deno.serve(async req => {
   const preflight = corsPreflight(req)
   if (preflight) return preflight
+
+  const denied = await requireStaff(req)
+  if (denied) return denied
 
   try {
     const { productId } = (await req.json()) as RequestBody

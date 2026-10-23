@@ -13,6 +13,7 @@
 // say exactly which part is wrong; report it back so this can be corrected
 // against the live schema.
 import { corsPreflight, jsonResponse } from '../_shared/cors.ts'
+import { requireStaff } from '../_shared/requireStaff.ts'
 import { shopifyGraphql, customerGid, adminCustomerUrl, getShopCurrencyCode } from '../_shared/shopify.ts'
 import { supabaseAdmin } from '../_shared/supabaseAdmin.ts'
 
@@ -118,6 +119,9 @@ async function resolveCustomerId(email?: string, phone?: string): Promise<string
 Deno.serve(async req => {
   const preflight = corsPreflight(req)
   if (preflight) return preflight
+
+  const denied = await requireStaff(req)
+  if (denied) return denied
 
   try {
     const { itemId, customerEmail, customerPhone } = (await req.json()) as RequestBody

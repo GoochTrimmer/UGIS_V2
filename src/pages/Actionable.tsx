@@ -9,6 +9,7 @@ import { supabase } from '../lib/supabase'
 import { STATUS_CONFIG } from '../lib/constants'
 import { writeItemLog } from '../lib/itemLog'
 import { getMissingFields, hasPriorityMissing } from '../lib/itemCompleteness'
+import { useProfile } from '../hooks/useProfile'
 import { useItems, useItemMutations } from '../hooks/useItems'
 import { useItemLogs } from '../hooks/useItemLogs'
 import {
@@ -429,7 +430,7 @@ function AutoResolvedSection() {
   )
 }
 
-function IncompleteItemsSection() {
+function IncompleteItemsSection({ isConsigneeUser }: { isConsigneeUser: boolean }) {
   const { data: items = [], isLoading } = useItems()
   const [editing, setEditing] = useState<Item | null>(null)
   const incompleteItems = useMemo(() => {
@@ -446,9 +447,19 @@ function IncompleteItemsSection() {
         Incomplete Items {incompleteItems.length > 0 && `(${incompleteItems.length})`}
       </h2>
       <p className="text-xs text-gray-500 mb-3">
-        Items missing a selling price, consignee, or the applicable cost / take-back price — easy to miss when
-        an item is added quickly and finished off later. Items missing payment info (selling price, cost /
-        take-back, or card fee) are flagged <span className="text-red-400">red</span> and sorted to the top.
+        {isConsigneeUser ? (
+          <>
+            Your items that are missing details — easy to miss when an item is added quickly and finished off
+            later. Items missing price info are flagged <span className="text-red-400">red</span> and sorted to
+            the top. Hit Edit to fill them in.
+          </>
+        ) : (
+          <>
+            Items missing a selling price, consignee, or the applicable cost / take-back price — easy to miss when
+            an item is added quickly and finished off later. Items missing payment info (selling price, cost /
+            take-back, or card fee) are flagged <span className="text-red-400">red</span> and sorted to the top.
+          </>
+        )}
       </p>
       <div className="card overflow-hidden">
         {isLoading ? (
@@ -476,8 +487,29 @@ export default function Actionable() {
   const { data: latestRun } = useLatestReconciliationRun()
   const { data: discrepancies = [], isLoading } = useOpenDiscrepancies()
   const trigger = useTriggerReconciliation()
+  const { profile, loading: profileLoading } = useProfile()
+  // Assume the restrictive role while the profile is still resolving, so a
+  // consignee never sees a flash of the Shopify sections.
+  const isConsigneeUser = profileLoading || profile.role === 'consignee'
 
   const running = latestRun?.status === 'running'
+
+  // Consignee accounts only see missing fields on their own stock — no
+  // Shopify discrepancies, store credit, or reconciliation info. The item
+  // list itself is already limited to their own items by RLS.
+  if (isConsigneeUser) {
+    return (
+      <Layout>
+        <div className="px-4 md:px-6 py-5 max-w-3xl mx-auto w-full space-y-5">
+          <div>
+            <h1 className="text-lg font-semibold text-white mb-1">Actionable</h1>
+            <p className="text-xs text-gray-500">Items in your stock that are missing key details.</p>
+          </div>
+          <IncompleteItemsSection isConsigneeUser />
+        </div>
+      </Layout>
+    )
+  }
 
   return (
     <Layout>
@@ -547,7 +579,7 @@ export default function Actionable() {
 
         <AutoResolvedSection />
 
-        <IncompleteItemsSection />
+        <IncompleteItemsSection isConsigneeUser={false} />
       </div>
     </Layout>
   )

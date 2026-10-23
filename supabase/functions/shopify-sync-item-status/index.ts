@@ -6,6 +6,7 @@
 // — in-store sale enforcement). Formerly shopify-sync-collection, renamed
 // on extending it to also handle inventory.
 import { corsPreflight, jsonResponse } from '../_shared/cors.ts'
+import { requireStaff } from '../_shared/requireStaff.ts'
 import { syncProductCollection } from '../_shared/collections.ts'
 import { setVariantInventory } from '../_shared/inventory.ts'
 
@@ -18,6 +19,9 @@ interface RequestBody {
 Deno.serve(async req => {
   const preflight = corsPreflight(req)
   if (preflight) return preflight
+
+  const denied = await requireStaff(req)
+  if (denied) return denied
 
   try {
     const { productId, variantId, status } = (await req.json()) as RequestBody

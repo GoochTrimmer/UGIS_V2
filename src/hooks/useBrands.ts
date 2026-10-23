@@ -10,16 +10,19 @@ interface ItemForRegen {
   item_brands: Array<{ sort_order: number; brand: { abbreviation: string } }>
 }
 
-type BrandInsert = Omit<Brand, 'id' | 'created_at'>
-type BrandUpdate = Pick<Brand, 'id'> & Partial<BrandInsert>
+// pending_review / created_by_consignee_id are server-computed (set by the
+// brands_flag_consignee trigger based on the inserting user's role) — never
+// sent by the client.
+type BrandInsert = Omit<Brand, 'id' | 'created_at' | 'pending_review' | 'created_by_consignee_id' | 'created_by_consignee'>
+type BrandUpdate = Pick<Brand, 'id'> & Partial<BrandInsert> & { pending_review?: boolean }
 
 async function fetchBrands(): Promise<Brand[]> {
   const { data, error } = await supabase
     .from('brands')
-    .select('*')
+    .select('*, created_by_consignee:consignees!brands_created_by_consignee_id_fkey(id, name)')
     .order('name')
   if (error) throw error
-  return data as Brand[]
+  return data as unknown as Brand[]
 }
 
 export function useBrands() {
@@ -44,6 +47,18 @@ export function useBrandMutations() {
       const { data, error } = await supabase.from('brands').update(brand).eq('id', id).select().single()
       if (error) throw error
       return data as Brand
+    },
+    onSuccess: invalidate,
+  })
+
+  // Clears pending_review without touching anything else about the brand —
+  // for the "Approve" button on a brand a consignee added, as opposed to
+  // BrandForm's save (which also clears it, but only as a side effect of a
+  // full edit).
+  const approve = useMutation({
+    mutationFn: async (id: string): Promise<void> => {
+      const { error } = await supabase.from('brands').update({ pending_review: false }).eq('id', id)
+      if (error) throw error
     },
     onSuccess: invalidate,
   })
@@ -94,5 +109,5 @@ export function useBrandMutations() {
     },
   })
 
-  return { create, update, remove, regenerateIds }
+  return { create, update, approve, remove, regenerateIds }
 }

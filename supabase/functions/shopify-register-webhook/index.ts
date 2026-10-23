@@ -3,6 +3,7 @@
 // regular runtime; run once (calling it again is harmless, it checks for
 // an existing matching subscription per topic first and skips it).
 import { corsPreflight, jsonResponse } from '../_shared/cors.ts'
+import { requireStaff } from '../_shared/requireStaff.ts'
 import { shopifyGraphql } from '../_shared/shopify.ts'
 
 const PROJECT_BASE = 'https://zuallwsggkzbccqhwrfl.supabase.co/functions/v1'
@@ -61,6 +62,9 @@ interface CreateSubscriptionResult {
 Deno.serve(async req => {
   const preflight = corsPreflight(req)
   if (preflight) return preflight
+
+  const denied = await requireStaff(req)
+  if (denied) return denied
 
   try {
     const existing = await shopifyGraphql<ExistingSubscriptionsResult>(LIST_SUBSCRIPTIONS, {

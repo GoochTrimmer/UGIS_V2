@@ -7,7 +7,7 @@ export function useItemLogs() {
     queryKey: ['item_logs'],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from('item_logs')
+        .from('item_logs_view')
         .select('*')
         .order('changed_at', { ascending: false })
         .limit(200)
@@ -22,7 +22,7 @@ export function useItemLogsForItem(itemId: string | undefined) {
     queryKey: ['item_logs', 'item', itemId],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from('item_logs')
+        .from('item_logs_view')
         .select('*')
         .eq('item_id', itemId as string)
         .order('changed_at', { ascending: false })

@@ -8,6 +8,7 @@
 //   { action: 'scan' }  -> pull + match, return results (no writes)
 //   { action: 'apply', matches: [{ itemId, productId, variantId }] } -> persist
 import { corsPreflight, jsonResponse } from '../_shared/cors.ts'
+import { requireStaff } from '../_shared/requireStaff.ts'
 import { shopifyGraphql, gidToId, adminProductUrl } from '../_shared/shopify.ts'
 import { supabaseAdmin } from '../_shared/supabaseAdmin.ts'
 
@@ -128,6 +129,9 @@ async function apply(matches: NonNullable<RequestBody['matches']>) {
 Deno.serve(async req => {
   const preflight = corsPreflight(req)
   if (preflight) return preflight
+
+  const denied = await requireStaff(req)
+  if (denied) return denied
 
   try {
     const body = (await req.json()) as RequestBody

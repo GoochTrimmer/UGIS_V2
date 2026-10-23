@@ -31,7 +31,8 @@
     @apply inline-flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-surface-1;
   }
   .btn-primary {
-    @apply btn bg-white text-black hover:bg-gray-200 focus:ring-white;
+    @apply btn bg-white text-black hover:bg-gray-200 focus:ring-white
+      disabled:bg-surface-3 disabled:text-gray-600 disabled:cursor-not-allowed disabled:hover:bg-surface-3;
   }
   .btn-ghost {
     @apply btn text-gray-400 hover:text-white hover:bg-surface-3;

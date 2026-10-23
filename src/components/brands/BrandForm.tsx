@@ -5,6 +5,10 @@ import type { Brand } from '../../types'
 
 interface BrandFormProps {
   brand?: Brand
+  // Pre-fills the name when creating from a brand request
+  initialName?: string
+  // Fires after a successful save, before onDone (which also fires on Cancel)
+  onSaved?: () => void
   onDone: () => void
 }
 
@@ -15,7 +19,7 @@ interface BrandFormValues {
   parent_id: string
 }
 
-export default function BrandForm({ brand, onDone }: BrandFormProps) {
+export default function BrandForm({ brand, initialName, onSaved, onDone }: BrandFormProps) {
   const { data: brands = [] } = useBrands()
   const { create, update, regenerateIds } = useBrandMutations()
   const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<BrandFormValues>()
@@ -31,9 +35,9 @@ export default function BrandForm({ brand, onDone }: BrandFormProps) {
         parent_id: brand.parent_id ?? '',
       })
     } else {
-      reset({ name: '', abbreviation: '', aliases: '', parent_id: '' })
+      reset({ name: initialName ?? '', abbreviation: '', aliases: '', parent_id: '' })
     }
-  }, [brand, reset])
+  }, [brand, initialName, reset])
 
   const onSubmit = async (data: BrandFormValues) => {
     const newAbbr = data.abbreviation.trim().toUpperCase()
@@ -44,13 +48,16 @@ export default function BrandForm({ brand, onDone }: BrandFormProps) {
       parent_id: data.parent_id || null,
     }
     if (brand) {
-      await update.mutateAsync({ id: brand.id, ...payload })
+      // Staff editing/confirming a brand clears its review flag, whether or
+      // not it was actually set — cheap and avoids a second click.
+      await update.mutateAsync({ id: brand.id, ...payload, pending_review: false })
       if (newAbbr !== originalAbbrRef.current) {
         await regenerateIds.mutateAsync(brand.id)
       }
     } else {
       await create.mutateAsync(payload)
     }
+    onSaved?.()
     onDone()
   }
 

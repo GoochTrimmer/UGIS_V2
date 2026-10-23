@@ -13,6 +13,7 @@
 // returns a schema-mismatch error, report it back so this can be corrected
 // against the live schema.
 import { corsPreflight, jsonResponse } from '../_shared/cors.ts'
+import { requireStaff } from '../_shared/requireStaff.ts'
 import { shopifyGraphql, customerGid, getShopCurrencyCode } from '../_shared/shopify.ts'
 import { supabaseAdmin } from '../_shared/supabaseAdmin.ts'
 
@@ -42,6 +43,9 @@ const DEBIT = `
 Deno.serve(async req => {
   const preflight = corsPreflight(req)
   if (preflight) return preflight
+
+  const denied = await requireStaff(req)
+  if (denied) return denied
 
   try {
     const { itemId, newAmount } = (await req.json()) as RequestBody

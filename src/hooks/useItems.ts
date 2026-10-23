@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { supabase } from '../lib/supabase'
-import { generateReadableId } from '../lib/idGenerator'
+import { generateReadableId, generateReadableIdBatch } from '../lib/idGenerator'
 import { buildSnapshot, computeDiff, writeItemLog } from '../lib/itemLog'
 import { invokeEdgeFunction } from '../lib/edgeFunctions'
 import type { Item, Brand, Consignee, ItemFilters, ItemStatus, ItemSnapshot, SaleChannel, SaleGeography, PaymentType } from '../types'
@@ -35,7 +35,7 @@ type ServerFilters = Omit<ItemFilters, 'search'>
 
 async function fetchItems(filters: ServerFilters = {}): Promise<Item[]> {
   let query = supabase
-    .from('items')
+    .from('items_view')
     .select(ITEM_SELECT)
     .order('created_at', { ascending: false })
 
@@ -76,7 +76,7 @@ export function useItem(id: string | undefined) {
     queryKey: ['item', id],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from('items')
+        .from('items_view')
         .select(ITEM_SELECT)
         .eq('id', id as string)
         .single()
@@ -229,6 +229,40 @@ export async function pushItemShopifyDraft(itemId: string): Promise<unknown> {
   return data
 }
 
+function buildCreateSnapshot(
+  insertedId: string,
+  readableId: string,
+  item: Omit<CreateItemInput, 'brands' | 'consignee'>,
+  brands: CreateItemInput['brands'],
+  consignee: CreateItemInput['consignee'],
+): ItemSnapshot {
+  return {
+    id: insertedId,
+    name: item.name,
+    size: item.size,
+    status: item.status,
+    season_year: item.season_year,
+    season_period: item.season_period,
+    season_custom: item.season_custom,
+    cost_amount: item.cost_amount,
+    takeback_price: item.takeback_price,
+    selling_price: item.selling_price,
+    sold_price: item.sold_price,
+    sale_channel: item.sale_channel,
+    sale_geography: item.sale_geography,
+    payment_type: item.payment_type,
+    card_fee: item.card_fee,
+    notes: item.notes,
+    readable_id: readableId,
+    consignee_id: item.consignee_id,
+    trade_in_cash_offer: item.trade_in_cash_offer,
+    trade_in_credit_offer: item.trade_in_credit_offer,
+    trade_in_choice: item.trade_in_choice,
+    brands: brands.map(b => ({ id: b.id, name: b.name, abbreviation: b.abbreviation })),
+    consignee: consignee ? { id: consignee.id, name: consignee.name, abbreviation: consignee.abbreviation } : null,
+  }
+}
+
 export function useItemMutations() {
   const qc = useQueryClient()
   const invalidate = () => qc.invalidateQueries({ queryKey: ['items'] })
@@ -259,39 +293,113 @@ export function useItemMutations() {
         if (bErr) throw bErr
       }
 
-      const snapshot: ItemSnapshot = {
-        id: insertedId,
-        name: item.name,
-        size: item.size,
-        status: item.status,
-        season_year: item.season_year,
-        season_period: item.season_period,
-        season_custom: item.season_custom,
-        cost_amount: item.cost_amount,
-        takeback_price: item.takeback_price,
-        selling_price: item.selling_price,
-        sold_price: item.sold_price,
-        sale_channel: item.sale_channel,
-        sale_geography: item.sale_geography,
-        payment_type: item.payment_type,
-        card_fee: item.card_fee,
-        notes: item.notes,
-        readable_id: readableId,
-        consignee_id: item.consignee_id,
-        trade_in_cash_offer: item.trade_in_cash_offer,
-        trade_in_credit_offer: item.trade_in_credit_offer,
-        trade_in_choice: item.trade_in_choice,
-        brands: brands.map(b => ({ id: b.id, name: b.name, abbreviation: b.abbreviation })),
-        consignee: consignee ? { id: consignee.id, name: consignee.name, abbreviation: consignee.abbreviation } : null,
-      }
       await writeItemLog({
         item_id: insertedId,
         item_name: item.name,
         field_changes: { _action: { from: null, to: 'created' } },
-        snapshot_before: snapshot,
+        snapshot_before: buildCreateSnapshot(insertedId, readableId, item, brands, consignee),
       })
 
       return data
+    },
+    onSuccess: () => {
+      invalidate()
+      invalidateLogs()
+    },
+  })
+
+  // Same item duplicated N times — one physical unit per row (own status,
+  // sale tracking, Shopify link), sharing a batch_id so the Inventory list
+  // can show "x of y in stock" and a future bulk action can target the
+  // whole group. For "we have 6 of this ring" rather than true variants.
+  const createBatch = useMutation({
+    mutationFn: async ({ quantity, brands, consignee, ...item }: CreateItemInput & { quantity: number }) => {
+      const brandAbbrs = brands.map(b => b.abbreviation)
+      const consigneeAbbr = consignee?.abbreviation ?? null
+      const readableIds = await generateReadableIdBatch(brandAbbrs, consigneeAbbr, quantity)
+      const batchId = crypto.randomUUID()
+
+      const { data, error } = await supabase
+        .from('items')
+        .insert(readableIds.map(readable_id => ({ ...item, readable_id, batch_id: batchId })))
+        .select()
+      if (error) throw error
+
+      const inserted = data as { id: string; readable_id: string }[]
+
+      if (brands.length > 0) {
+        const brandRows = inserted.flatMap(row =>
+          brands.map((b, i) => ({ item_id: row.id, brand_id: b.id, sort_order: i })),
+        )
+        const { error: bErr } = await supabase.from('item_brands').insert(brandRows)
+        if (bErr) throw bErr
+      }
+
+      await Promise.all(inserted.map(row =>
+        writeItemLog({
+          item_id: row.id,
+          item_name: item.name,
+          field_changes: { _action: { from: null, to: 'created' }, _batch: { from: null, to: `1 of ${quantity}` } },
+          snapshot_before: buildCreateSnapshot(row.id, row.readable_id, item, brands, consignee),
+        }),
+      ))
+
+      return inserted
+    },
+    onSuccess: () => {
+      invalidate()
+      invalidateLogs()
+    },
+  })
+
+  // "Add N more of this existing item" — e.g. a restock. Clones the given
+  // item's current fields (whatever the caller passes, normally that
+  // item's own saved values) into N new rows and joins them into its
+  // batch. If the source item wasn't already in a batch (a lone item, or
+  // one created before this feature existed), it's backfilled into one now
+  // — so e.g. adding 3 more of a plain single item turns it + the 3 new
+  // ones into a batch of 4, retroactively.
+  const addUnits = useMutation({
+    mutationFn: async (
+      { sourceItemId, sourceBatchId, quantity, brands, consignee, ...item }:
+        CreateItemInput & { sourceItemId: string; sourceBatchId: string | null; quantity: number },
+    ) => {
+      const batchId = sourceBatchId ?? crypto.randomUUID()
+      if (!sourceBatchId) {
+        const { error: backfillErr } = await supabase.from('items').update({ batch_id: batchId }).eq('id', sourceItemId)
+        if (backfillErr) throw backfillErr
+      }
+
+      const brandAbbrs = brands.map(b => b.abbreviation)
+      const consigneeAbbr = consignee?.abbreviation ?? null
+      const readableIds = await generateReadableIdBatch(brandAbbrs, consigneeAbbr, quantity)
+
+      const { data, error } = await supabase
+        .from('items')
+        .insert(readableIds.map(readable_id => ({ ...item, readable_id, batch_id: batchId })))
+        .select()
+      if (error) throw error
+
+      const inserted = data as { id: string; readable_id: string }[]
+
+      if (brands.length > 0) {
+        const brandRows = inserted.flatMap(row =>
+          brands.map((b, i) => ({ item_id: row.id, brand_id: b.id, sort_order: i })),
+        )
+        const { error: bErr } = await supabase.from('item_brands').insert(brandRows)
+        if (bErr) throw bErr
+      }
+
+      await Promise.all(inserted.map(row =>
+        writeItemLog({
+          item_id: row.id,
+          item_name: item.name,
+          field_changes: { _action: { from: null, to: 'created' }, _batch: { from: null, to: `restock, +${quantity}` } },
+          snapshot_before: buildCreateSnapshot(row.id, row.readable_id, item, brands, consignee),
+        }),
+      ))
+
+      return inserted
     },
     onSuccess: () => {
       invalidate()
@@ -459,7 +567,7 @@ export function useItemMutations() {
   })
 
   return {
-    create, update, updateStatus, remove, markShopifyFinished, unbindShopify,
+    create, createBatch, addUnits, update, updateStatus, remove, markShopifyFinished, unbindShopify,
     pushShopifyDraft, linkShopifyProduct, forceSyncShopifyStatus,
   }
 }

@@ -33,6 +33,9 @@ export interface Brand {
   aliases: string[] | null
   parent_id: string | null
   created_at: string
+  pending_review: boolean
+  created_by_consignee_id: string | null
+  created_by_consignee: { id: string; name: string } | null
 }
 
 export interface Consignee {
@@ -68,6 +71,7 @@ export interface Item {
   updated_at: string
   brands: Brand[]
   consignee: Pick<Consignee, 'id' | 'name' | 'abbreviation' | 'is_default_store'> | null
+  batch_id: string | null
   shopify_product_id: string | null
   shopify_variant_id: string | null
   shopify_admin_url: string | null
@@ -187,4 +191,16 @@ export interface ItemFilters {
   search?: string
   brand_ids?: string[]
   _brandId?: string
+}
+
+export interface BrandRequest {
+  id: string
+  name: string
+  item_count: number
+  example_item: string | null
+  status: 'pending' | 'resolved' | 'dismissed'
+  requested_by: string | null
+  consignee_id: string | null
+  created_at: string
+  consignee: { name: string } | null
 }

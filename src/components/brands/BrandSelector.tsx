@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useBrands } from '../../hooks/useBrands'
+import { brandMatchesQuery } from '../../lib/brandMatch'
 import type { Brand } from '../../types'
 
 interface BrandSelectorProps {
@@ -22,10 +23,7 @@ export default function BrandSelector({ value = [], onChange }: BrandSelectorPro
   }, [])
 
   const filtered = brands.filter(b =>
-    !value.find(v => v.id === b.id) &&
-    (b.name.toLowerCase().includes(query.toLowerCase()) ||
-     b.abbreviation.toLowerCase().includes(query.toLowerCase()) ||
-     (b.aliases ?? []).some(a => a.toLowerCase().includes(query.toLowerCase())))
+    !value.find(v => v.id === b.id) && brandMatchesQuery(b, query)
   )
 
   const add = (brand: Brand) => {

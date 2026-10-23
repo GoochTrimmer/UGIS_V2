@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useConsignees, useConsigneeMutations, useConsigneeItemCounts } from '../hooks/useConsignees'
+import { useConsigneeAccounts, useConsigneeAccountMutations } from '../hooks/useConsigneeAccounts'
 import { useItems } from '../hooks/useItems'
 import Layout from '../components/layout/Layout'
 import Modal from '../components/ui/Modal'
@@ -9,6 +10,125 @@ import Confirm from '../components/ui/Confirm'
 import Spinner from '../components/ui/Spinner'
 import { STATUS_CONFIG } from '../lib/constants'
 import type { Consignee } from '../types'
+
+function generatePassword(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'
+  return Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
+}
+
+// Create-login / reset-password / revoke-access controls for one
+// consignee — staff hands the shown password to the consignee directly
+// (in person, WhatsApp, etc.) rather than relying on Supabase's own email
+// delivery being configured.
+function ConsigneeAccountSection({ consignee }: { consignee: Consignee }) {
+  const { data: accounts } = useConsigneeAccounts()
+  const { create, resetPassword, revoke } = useConsigneeAccountMutations()
+  const account = accounts?.get(consignee.id)
+
+  const [mode, setMode] = useState<'idle' | 'create' | 'reset'>('idle')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [revealed, setRevealed] = useState<string | null>(null)
+  const [revoking, setRevoking] = useState(false)
+  const [error, setError] = useState('')
+
+  const startCreate = () => { setMode('create'); setEmail(''); setPassword(generatePassword()); setError(''); setRevealed(null) }
+  const startReset = () => { setMode('reset'); setPassword(generatePassword()); setError(''); setRevealed(null) }
+
+  const submitCreate = async () => {
+    if (!email || !password) return
+    setError('')
+    try {
+      await create.mutateAsync({ consigneeId: consignee.id, email, password })
+      setRevealed(password)
+      setMode('idle')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create login')
+    }
+  }
+
+  const submitReset = async () => {
+    if (!password) return
+    setError('')
+    try {
+      await resetPassword.mutateAsync({ consigneeId: consignee.id, password })
+      setRevealed(password)
+      setMode('idle')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to reset password')
+    }
+  }
+
+  return (
+    <div className="px-5 py-4 border-b border-border space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-gray-600">Login access</span>
+        {account ? (
+          <span className="text-xs text-gray-300 font-mono">{account.email ?? 'active'}</span>
+        ) : (
+          <span className="text-xs text-gray-700">No login</span>
+        )}
+      </div>
+
+      {revealed && (
+        <div className="text-xs bg-surface-2 border border-border rounded px-2.5 py-2 space-y-1">
+          <p className="text-gray-500">Share this password with the consignee — it won't be shown again:</p>
+          <p className="font-mono text-white select-all">{revealed}</p>
+        </div>
+      )}
+
+      {mode === 'idle' && (
+        <div className="flex gap-2">
+          {!account && <button className="btn-ghost py-1 px-2 text-xs" onClick={startCreate}>Create login</button>}
+          {account && <button className="btn-ghost py-1 px-2 text-xs" onClick={startReset}>Reset password</button>}
+          {account && <button className="btn-ghost py-1 px-2 text-xs text-red-400" onClick={() => setRevoking(true)}>Revoke access</button>}
+        </div>
+      )}
+
+      {mode === 'create' && (
+        <div className="space-y-2">
+          <input className="input h-8 text-xs" type="email" placeholder="Login email" value={email} onChange={e => setEmail(e.target.value)} autoFocus />
+          <div className="flex gap-2">
+            <input className="input h-8 text-xs font-mono flex-1" value={password} onChange={e => setPassword(e.target.value)} />
+            <button type="button" className="btn-ghost py-1 px-2 text-xs shrink-0" onClick={() => setPassword(generatePassword())}>↻</button>
+          </div>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          <div className="flex gap-2 justify-end">
+            <button className="btn-ghost py-1 px-2 text-xs" onClick={() => setMode('idle')}>Cancel</button>
+            <button className="btn-primary py-1 px-2 text-xs" disabled={!email || !password || create.isPending} onClick={() => void submitCreate()}>
+              {create.isPending ? 'Creating…' : 'Create'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mode === 'reset' && (
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <input className="input h-8 text-xs font-mono flex-1" value={password} onChange={e => setPassword(e.target.value)} />
+            <button type="button" className="btn-ghost py-1 px-2 text-xs shrink-0" onClick={() => setPassword(generatePassword())}>↻</button>
+          </div>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          <div className="flex gap-2 justify-end">
+            <button className="btn-ghost py-1 px-2 text-xs" onClick={() => setMode('idle')}>Cancel</button>
+            <button className="btn-primary py-1 px-2 text-xs" disabled={!password || resetPassword.isPending} onClick={() => void submitReset()}>
+              {resetPassword.isPending ? 'Saving…' : 'Set password'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <Confirm
+        open={revoking}
+        onClose={() => setRevoking(false)}
+        onConfirm={() => revoke.mutateAsync(consignee.id)}
+        title="Revoke Login Access"
+        message={`This permanently deletes the login for "${consignee.name}". They'll need a new login created from scratch to regain access.`}
+        danger
+      />
+    </div>
+  )
+}
 
 function ConsigneePanel({ consignee }: { consignee: Consignee }) {
   const { data: items = [], isLoading } = useItems({ consignee_id: consignee.id })
@@ -22,6 +142,8 @@ function ConsigneePanel({ consignee }: { consignee: Consignee }) {
 
   return (
     <div className="flex flex-col h-full">
+      {!consignee.is_default_store && <ConsigneeAccountSection consignee={consignee} />}
+
       {/* Consignee meta */}
       <div className="px-5 py-4 border-b border-border space-y-1.5">
         {consignee.contact && (
@@ -72,7 +194,7 @@ function ConsigneePanel({ consignee }: { consignee: Consignee }) {
                               <span className="text-xs text-gray-600">{item.size}</span>
                             )}
                             {item.selling_price != null && (
-                              <span className="text-xs text-gray-400">£{Number(item.selling_price).toFixed(0)}</span>
+                              <span className="text-xs text-gray-400">${Number(item.selling_price).toFixed(0)}</span>
                             )}
                           </div>
                         </div>

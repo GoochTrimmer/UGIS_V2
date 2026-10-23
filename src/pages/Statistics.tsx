@@ -7,6 +7,7 @@ import {
 import { useItems } from '../hooks/useItems'
 import { useBrands } from '../hooks/useBrands'
 import { useConsignees } from '../hooks/useConsignees'
+import { useProfile } from '../hooks/useProfile'
 import { useSoldDates } from '../hooks/useItemStatusHistory'
 import Layout from '../components/layout/Layout'
 import Spinner from '../components/ui/Spinner'
@@ -177,6 +178,8 @@ export default function Statistics() {
   const { data: allItems = [], isLoading } = useItems()
   const { data: brands = [] } = useBrands()
   const { data: consignees = [] } = useConsignees()
+  const { profile, loading: profileLoading } = useProfile()
+  const isConsigneeUser = profileLoading || profile.role === 'consignee' // assume the more restrictive role while unresolved
 
   const { data: soldDates } = useSoldDates()
 
@@ -467,12 +470,14 @@ export default function Statistics() {
               onChange={setBrandFilters}
               placeholder="brands"
             />
-            <MultiSelect
-              options={consignees.map(c => ({ value: c.id, label: c.name }))}
-              selected={consigneeFilters}
-              onChange={setConsigneeFilters}
-              placeholder="consignees"
-            />
+            {!isConsigneeUser && (
+              <MultiSelect
+                options={consignees.map(c => ({ value: c.id, label: c.name }))}
+                selected={consigneeFilters}
+                onChange={setConsigneeFilters}
+                placeholder="consignees"
+              />
+            )}
             {(brandFilters.length > 0 || consigneeFilters.length > 0) && (
               <button
                 className="btn-ghost text-xs h-8 px-2"

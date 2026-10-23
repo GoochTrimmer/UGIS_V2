@@ -4,6 +4,7 @@
 // only — no images or description, those get finished by staff in Shopify's
 // own admin UI.
 import { corsPreflight, jsonResponse } from '../_shared/cors.ts'
+import { requireStaff } from '../_shared/requireStaff.ts'
 import { shopifyGraphql, gidToId, adminProductUrl } from '../_shared/shopify.ts'
 import { supabaseAdmin } from '../_shared/supabaseAdmin.ts'
 import { convertSgdToUsd } from '../_shared/currency.ts'
@@ -62,6 +63,9 @@ Deno.serve(async req => {
   const preflight = corsPreflight(req)
   if (preflight) return preflight
 
+  const denied = await requireStaff(req)
+  if (denied) return denied
+
   try {
     const { itemId } = (await req.json()) as RequestBody
     if (!itemId) return jsonResponse({ error: 'itemId is required' }, 400)
@@ -69,11 +73,30 @@ Deno.serve(async req => {
     const db = supabaseAdmin()
     const { data: item, error: itemErr } = await db
       .from('items')
-      .select('id, name, readable_id, selling_price, status, shopify_product_id, shopify_variant_id')
+      .select('id, name, readable_id, selling_price, status, shopify_product_id, shopify_variant_id, batch_id')
       .eq('id', itemId)
       .single()
 
     if (itemErr || !item) return jsonResponse({ error: 'Item not found' }, 404)
+
+    // Multi-quantity items ("6 of the same ring") push as ONE Shopify
+    // listing, not one per unit — initial inventory is how many of the
+    // batch are still in stock right now, not the usual single-piece 1.
+    // One-shot snapshot at push time, not an ongoing synced count: if
+    // staff sell a different sibling unit later, this listing's Shopify
+    // quantity doesn't follow it down. Acceptable for now since consignee
+    // stock (who this is mainly for) isn't normally pushed to Shopify at
+    // all — see batch_id's migration note.
+    let initialQuantity = 1
+    if (item.batch_id) {
+      const { count, error: countErr } = await db
+        .from('items')
+        .select('id', { count: 'exact', head: true })
+        .eq('batch_id', item.batch_id)
+        .eq('status', 'in_stock')
+      if (countErr) console.error('[shopify-create-draft] batch count failed, defaulting to 1', countErr)
+      else if (count != null) initialQuantity = Math.max(1, count)
+    }
 
     // Idempotent: if already linked, just hand back the existing link
     // instead of creating a duplicate product.
@@ -143,11 +166,13 @@ Deno.serve(async req => {
         console.error('[shopify-create-draft] variant update errors', updated.productVariantsBulkUpdate.userErrors)
       }
 
-      // Enable inventory tracking and set initial stock to 1 — a one-off
-      // archive piece is either available or it isn't. Best-effort: the
-      // product/variant already exist regardless of whether this succeeds.
+      // Enable inventory tracking and set initial stock — 1 for a one-off
+      // archive piece, or the batch's current in-stock count for a
+      // multi-quantity listing (see initialQuantity above). Best-effort:
+      // the product/variant already exist regardless of whether this
+      // succeeds.
       try {
-        await setVariantInventory(gidToId(variantId), 1, 'received', true)
+        await setVariantInventory(gidToId(variantId), initialQuantity, 'received', true)
       } catch (err) {
         console.error('[shopify-create-draft] failed to set initial inventory', err)
       }

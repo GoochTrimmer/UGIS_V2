@@ -82,6 +82,21 @@ export default function Inventory() {
     return acc
   }, {})
 
+  // Sibling counts for multi-quantity items ("6 of the same ring") — from
+  // allForCounts (not the status-filtered `items`) so "x of y in stock"
+  // stays accurate regardless of which status tab is active.
+  const batchCounts = useMemo(() => {
+    const m = new Map<string, { total: number; inStock: number }>()
+    for (const item of allForCounts) {
+      if (!item.batch_id) continue
+      const entry = m.get(item.batch_id) ?? { total: 0, inStock: 0 }
+      entry.total += 1
+      if (item.status === 'in_stock') entry.inStock += 1
+      m.set(item.batch_id, entry)
+    }
+    return m
+  }, [allForCounts])
+
   const setStatus = (status: ItemStatus | undefined) => {
     setFilters(f => ({ ...f, status }))
     try { localStorage.setItem(STATUS_FILTER_KEY, status ?? 'all') } catch { /* ignore */ }
@@ -172,7 +187,7 @@ export default function Inventory() {
             <div className="text-sm text-red-400 px-4 py-8 text-center">{(error as Error).message}</div>
           )}
           {!isLoading && !error && (
-            <InventoryTable items={items} sort={sort} onSortChange={setSort} bulkMode={bulkMode} missingListingIds={missingListingIds} />
+            <InventoryTable items={items} sort={sort} onSortChange={setSort} bulkMode={bulkMode} missingListingIds={missingListingIds} batchCounts={batchCounts} />
           )}
         </div>
       </div>

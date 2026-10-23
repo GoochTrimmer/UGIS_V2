@@ -6,6 +6,7 @@
 // before creating an account, just exposed standalone and without the
 // create-if-missing fallback.
 import { corsPreflight, jsonResponse } from '../_shared/cors.ts'
+import { requireStaff } from '../_shared/requireStaff.ts'
 import { shopifyGraphql } from '../_shared/shopify.ts'
 
 interface RequestBody {
@@ -31,6 +32,9 @@ const FIND_CUSTOMER = `
 Deno.serve(async req => {
   const preflight = corsPreflight(req)
   if (preflight) return preflight
+
+  const denied = await requireStaff(req)
+  if (denied) return denied
 
   try {
     const { email, phone } = (await req.json()) as RequestBody

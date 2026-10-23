@@ -5,6 +5,7 @@
 // never persists a name/email, only the id, since the credit-issue flow's
 // email/phone input is transient — see shopify-issue-store-credit).
 import { corsPreflight, jsonResponse } from '../_shared/cors.ts'
+import { requireStaff } from '../_shared/requireStaff.ts'
 import { shopifyGraphql, customerGid, adminCustomerUrl } from '../_shared/shopify.ts'
 
 interface RequestBody {
@@ -34,6 +35,9 @@ const CUSTOMERS_BY_ID = `
 Deno.serve(async req => {
   const preflight = corsPreflight(req)
   if (preflight) return preflight
+
+  const denied = await requireStaff(req)
+  if (denied) return denied
 
   try {
     const { customerIds } = (await req.json()) as RequestBody
