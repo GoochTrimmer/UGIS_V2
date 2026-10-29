@@ -1,4 +1,6 @@
 import { useItemStatusHistory } from '../../hooks/useItemStatusHistory'
+import { useUserLabels } from '../../hooks/useUserLabels'
+import { useProfile } from '../../hooks/useProfile'
 import { STATUS_CONFIG } from '../../lib/constants'
 import Spinner from '../ui/Spinner'
 
@@ -16,6 +18,9 @@ function durationLabel(fromIso: string, toIso: string | null): string {
 
 export default function StatusTimeline({ itemId }: { itemId: string }) {
   const { data: history = [], isLoading } = useItemStatusHistory(itemId)
+  const { profile } = useProfile()
+  const isStaff = profile.role === 'staff'
+  const { data: userLabels } = useUserLabels(isStaff ? history.map(h => h.changed_by) : [])
 
   if (isLoading) {
     return <div className="flex justify-center py-2"><Spinner size="sm" /></div>
@@ -41,6 +46,11 @@ export default function StatusTimeline({ itemId }: { itemId: string }) {
                 ? `· current, ${durationLabel(entry.changed_at, null)} so far`
                 : `· ${durationLabel(entry.changed_at, next.changed_at)}`}
             </span>
+            {isStaff && (
+              <span className="text-gray-700">
+                · {entry.changed_by ? `by ${userLabels?.get(entry.changed_by) ?? '…'}` : 'auto'}
+              </span>
+            )}
           </li>
         )
       })}

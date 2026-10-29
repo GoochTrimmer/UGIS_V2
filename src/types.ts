@@ -138,6 +138,7 @@ export interface ItemStatusHistoryEntry {
   item_id: string
   status: ItemStatus
   changed_at: string
+  changed_by: string | null
 }
 
 export type ReconciliationRunStatus = 'running' | 'completed' | 'failed'

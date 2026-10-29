@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useItemLogs } from '../hooks/useItemLogs'
 import { useItemMutations } from '../hooks/useItems'
+import { useUserLabels } from '../hooks/useUserLabels'
+import { useProfile } from '../hooks/useProfile'
 import { supabase } from '../lib/supabase'
 import Layout from '../components/layout/Layout'
 import Spinner from '../components/ui/Spinner'
@@ -42,6 +44,9 @@ export default function Logs() {
   const { update } = useItemMutations()
   const qc = useQueryClient()
   const [reverting, setReverting] = useState<string | null>(null)
+  const { profile } = useProfile()
+  const isStaff = profile.role === 'staff'
+  const { data: userLabels } = useUserLabels(isStaff ? logs.map(l => l.changed_by) : [])
 
   const handleRevert = async (log: ItemLog) => {
     if (!log.item_id || log.reverted || actionType(log) !== 'edit' || !log.snapshot_before?.id) return
@@ -138,6 +143,16 @@ export default function Logs() {
                           <span className="text-xs text-gray-600 shrink-0">
                             {new Date(log.changed_at).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}
                           </span>
+
+                          {/* Who — staff only; null for anything pre-dating
+                              the changed_by default (019), or a write with
+                              no user session behind it (webhooks,
+                              reconciliation, service-role actions) */}
+                          {isStaff && log.changed_by && (
+                            <span className="text-xs text-gray-700 shrink-0">
+                              by {userLabels?.get(log.changed_by) ?? '…'}
+                            </span>
+                          )}
 
                           {/* Type badge */}
                           {type === 'created' && (

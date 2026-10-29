@@ -1,4 +1,6 @@
 import { useItemLogsForItem } from '../../hooks/useItemLogs'
+import { useUserLabels } from '../../hooks/useUserLabels'
+import { useProfile } from '../../hooks/useProfile'
 import { FIELD_LABELS, fmtVal } from '../../lib/itemLogFormat'
 import Spinner from '../ui/Spinner'
 
@@ -8,6 +10,9 @@ function formatDate(iso: string): string {
 
 export default function ItemEditHistory({ itemId }: { itemId: string }) {
   const { data: logs = [], isLoading } = useItemLogsForItem(itemId)
+  const { profile } = useProfile()
+  const isStaff = profile.role === 'staff'
+  const { data: userLabels } = useUserLabels(isStaff ? logs.map(l => l.changed_by) : [])
 
   // Status changes already have their own timeline above — only show the
   // other fields here (price corrections, discounts, brand/consignee
@@ -32,6 +37,9 @@ export default function ItemEditHistory({ itemId }: { itemId: string }) {
       {entries.map(({ log, changes }) => (
         <li key={log.id} className={`text-xs border-l-2 border-border pl-2.5 ${log.reverted ? 'opacity-40 line-through' : ''}`}>
           <span className="text-gray-600">{formatDate(log.changed_at)}</span>
+          {isStaff && log.changed_by && (
+            <span className="text-gray-700"> · by {userLabels?.get(log.changed_by) ?? '…'}</span>
+          )}
           <div className="space-y-0.5 mt-0.5">
             {changes.map(([field, { from, to }]) => (
               <div key={field}>

@@ -50,7 +50,10 @@ Deno.serve(async req => {
         return jsonResponse({ error: createErr?.message ?? 'Failed to create user' }, 500)
       }
 
-      const { error: profileErr } = await admin.from('user_profiles').insert({
+      // upsert, not insert — creating the auth user fires a trigger
+      // (sync_new_user_profile, 019) that's already inserted a default
+      // 'staff' row for this id by the time we get here.
+      const { error: profileErr } = await admin.from('user_profiles').upsert({
         id: created.user.id,
         role: 'consignee',
         consignee_id: body.consigneeId,

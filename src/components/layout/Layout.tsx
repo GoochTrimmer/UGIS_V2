@@ -52,7 +52,7 @@ export default function Layout({ children }: LayoutProps) {
           <div className="flex items-center gap-2">
             <img src={logo} alt="Upstairs Garments" className="h-5 w-auto" />
             <span className="text-xs font-mono font-medium tracking-widest text-gray-400">
-              {profile.role === 'consignee' ? profile.consignee?.name : 'UGIS'}
+              UGIS
             </span>
           </div>
           <button
@@ -128,7 +128,7 @@ export default function Layout({ children }: LayoutProps) {
           <div className="px-5 py-4 border-b border-border flex items-center gap-3">
             <img src={logo} alt="Upstairs Garments" className="h-9 w-auto" />
             <span className="text-xs font-mono font-medium tracking-widest text-gray-500 uppercase">
-              {profile.role === 'consignee' ? profile.consignee?.name : 'UGIS'}
+              UGIS
             </span>
           </div>
           <nav className="flex-1 px-2 py-3 space-y-0.5">
